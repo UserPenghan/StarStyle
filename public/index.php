@@ -1,0 +1,54 @@
+<?php
+
+declare(strict_types=1);
+
+require dirname(__DIR__) . '/bootstrap.php';
+
+use App\Controllers\AdminController;
+use App\Controllers\ApiController;
+use App\Controllers\AuthController;
+use App\Controllers\PublicController;
+use App\Core\Router;
+
+$router = new Router();
+
+$router->get('/', [PublicController::class, 'home']);
+$router->get('/services-catalog', [PublicController::class, 'services']);
+$router->get('/booking', [PublicController::class, 'booking']);
+$router->post('/booking', [PublicController::class, 'createBooking']);
+$router->get('/customer/login', [PublicController::class, 'customerLogin']);
+$router->post('/customer/login', [PublicController::class, 'authenticateCustomer']);
+$router->get('/customer/account', [PublicController::class, 'customerAccount']);
+$router->post('/customer/logout', [PublicController::class, 'customerLogout']);
+
+$router->get('/login', [AuthController::class, 'login']);
+$router->post('/login', [AuthController::class, 'authenticate']);
+$router->post('/logout', [AuthController::class, 'logout']);
+
+$router->get('/dashboard', [AdminController::class, 'dashboard']);
+$router->get('/account', [AdminController::class, 'account']);
+$router->get('/calendar', [AdminController::class, 'calendar']);
+$router->post('/calendar/bookings', [AdminController::class, 'createInternalBooking']);
+$router->post('/calendar/blocks', [AdminController::class, 'createBlock']);
+$router->get('/sales', [AdminController::class, 'sales']);
+$router->post('/sales/checkout', [AdminController::class, 'checkout']);
+$router->get('/customers', [AdminController::class, 'customers']);
+$router->get('/staff', [AdminController::class, 'staff']);
+$router->get('/services', [AdminController::class, 'services']);
+$router->get('/inventory', [AdminController::class, 'inventory']);
+$router->get('/vouchers', [AdminController::class, 'vouchers']);
+$router->get('/analytics', [AdminController::class, 'analytics']);
+$router->get('/reviews', [AdminController::class, 'reviews']);
+$router->get('/settings', [AdminController::class, 'settings']);
+$router->post('/settings/staff-permissions', [AdminController::class, 'updateStaffPermissions']);
+
+$router->get('/api/calendar/events', [ApiController::class, 'calendarEvents']);
+$router->get('/api/bookings/availability', [ApiController::class, 'availability']);
+$router->get('/api/customers/search', [ApiController::class, 'customerSearch']);
+$router->get('/api/services/by-staff', [ApiController::class, 'staffServices']);
+$router->get('/api/vouchers/validate', [ApiController::class, 'validateVoucher']);
+$router->get('/api/dashboard/kpis', [ApiController::class, 'dashboardKpis']);
+$router->post('/api/pos/calculate', [ApiController::class, 'posCalculate']);
+$router->get('/api/settings/staff-permissions', [ApiController::class, 'staffPermissions']);
+
+$router->dispatch($_SERVER['REQUEST_METHOD'], $_SERVER['REQUEST_URI']);
