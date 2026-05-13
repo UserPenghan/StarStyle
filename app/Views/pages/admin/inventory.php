@@ -41,7 +41,7 @@ $categoryRows = [];
 $brandRows = [];
 $supplierRows = [];
 
-$supplierMeta = [
+$supplierMeta = $supplierMeta ?? [
     'PT Glow Source' => ['contact' => 'Ayu Permata', 'lead_time' => '2 hari', 'status' => 'Aktif', 'address' => 'Silom Trade Center, Bangkok'],
     'PT Groom Lab' => ['contact' => 'Rendra Yusuf', 'lead_time' => '3 hari', 'status' => 'Prioritas', 'address' => 'Sukhumvit Distribution Hub, Bangkok'],
     'PT Color Boutique' => ['contact' => 'Mira Valencia', 'lead_time' => '4 hari', 'status' => 'Aktif', 'address' => 'Bang Rak Creative Warehouse, Bangkok'],
@@ -170,14 +170,58 @@ foreach ($brandRows as &$brandRow) {
 }
 unset($brandRow);
 
+if (!empty($inventoryBrands)) {
+    $brandRows = [];
+    foreach ($inventoryBrands as $brand) {
+        $brandRows[(string) $brand['name']] = [
+            'id' => (int) $brand['id'],
+            'name' => (string) $brand['name'],
+        ];
+    }
+}
+
+if (!empty($inventoryCategories)) {
+    $categoryRows = [];
+    foreach ($inventoryCategories as $category) {
+        $categoryRows[(string) $category['name']] = [
+            'id' => (int) $category['id'],
+            'name' => (string) $category['name'],
+        ];
+    }
+}
+
+if (!empty($inventorySuppliers)) {
+    $supplierRows = [];
+    foreach ($inventorySuppliers as $supplier) {
+        $supplierRows[(string) $supplier['name']] = [
+            'id' => (int) $supplier['id'],
+            'name' => (string) $supplier['name'],
+            'description' => (string) ($supplier['description'] ?? ''),
+            'contact' => (string) ($supplier['contact'] ?? ''),
+            'email' => (string) ($supplier['email'] ?? ''),
+            'phone' => (string) ($supplier['phone'] ?? ''),
+            'website' => (string) ($supplier['website'] ?? ''),
+            'address' => (string) ($supplier['address'] ?? ''),
+            'city' => (string) ($supplier['city'] ?? ''),
+            'country' => (string) ($supplier['country'] ?? ''),
+            'postal' => (string) ($supplier['postal'] ?? ''),
+        ];
+    }
+}
+
 $productBrands = array_values(array_keys($brandRows));
 sort($productBrands, SORT_NATURAL | SORT_FLAG_CASE);
 $productCategories = array_values(array_keys($categoryRows));
 sort($productCategories, SORT_NATURAL | SORT_FLAG_CASE);
 $productSuppliers = array_values(array_keys($supplierRows));
 sort($productSuppliers, SORT_NATURAL | SORT_FLAG_CASE);
+$inventoryLocations = $inventoryLocations ?? [[
+    'id' => 1,
+    'name' => 'Star Salon',
+    'address' => 'Jl. Raya Inpres No.04, RT.4/RW.10, Kp. Tengah, Kec. Kramat jati, Kota Jakarta Timur',
+]];
 
-$purchaseRows = [
+$purchaseRows = !empty($purchaseRows) ? $purchaseRows : [
     [
         'document' => 'P000002',
         'created_at' => '28 Apr 2026',
@@ -225,14 +269,14 @@ sort($purchaseStatuses, SORT_NATURAL | SORT_FLAG_CASE);
 $purchaseSuppliers = array_values(array_unique($purchaseSuppliers));
 sort($purchaseSuppliers, SORT_NATURAL | SORT_FLAG_CASE);
 
-$opnameRows = [
-    ['name' => 'Hair Care Count Cycle', 'location' => 'Star Salon', 'started_at' => '2026-04-20', 'ended_at' => '2026-04-20', 'status' => 'Komplit'],
+$opnameRows = !empty($opnameRows) ? $opnameRows : [
+    ['name' => 'Hair Care Count Cycle', 'location' => 'Star Salon', 'started_at' => '2026-04-20', 'ended_at' => '2026-04-20', 'status' => 'Completed'],
     ['name' => 'Styling Rack Recount', 'location' => 'Star Salon', 'started_at' => '2026-04-22', 'ended_at' => '2026-04-23', 'status' => 'Meninjau'],
     ['name' => 'Nail Corner Audit', 'location' => 'Star Salon', 'started_at' => '2026-04-24', 'ended_at' => '2026-04-25', 'status' => 'Perhitungan'],
-    ['name' => 'Retail Counter Spot Check', 'location' => 'Star Salon', 'started_at' => '2026-04-26', 'ended_at' => '2026-04-26', 'status' => 'Dibatalkan'],
+    ['name' => 'Retail Counter Spot Check', 'location' => 'Star Salon', 'started_at' => '2026-04-26', 'ended_at' => '2026-04-26', 'status' => 'Cancelled'],
 ];
 
-$opnameDetailProducts = [
+$opnameDetailProducts = !empty($opnameDetailProducts) ? $opnameDetailProducts : [
     ['name' => 'Hair Serum Wardah - Per Pump', 'code' => '-', 'sku' => '-', 'expected' => 7],
     ['name' => 'Hair Serum Wardah - 500ml', 'code' => 'W11', 'sku' => '10', 'expected' => 10],
 ];
@@ -240,7 +284,7 @@ $opnameDetailProducts = [
 $inventoryToday = new DateTimeImmutable('today');
 $opnameRangeStart = $inventoryToday->modify('-6 days');
 $opnameRangeEnd = $inventoryToday;
-$opnameStatuses = ['All Status', 'Perhitungan', 'Meninjau', 'Komplit', 'Dibatalkan'];
+$opnameStatuses = ['All Status', 'Perhitungan', 'Meninjau', 'Completed', 'Cancelled'];
 
 $inventoryTabs = [
     ['key' => 'products', 'label' => 'Produk'],
@@ -317,6 +361,7 @@ $inventoryTabs = [
                         <?php foreach ($productRows as $row): ?>
                             <tr
                                 data-inventory-row
+                                data-product-id="<?= e((string) ($row['id'] ?? 0)) ?>"
                                 data-name="<?= e($row['name']) ?>"
                                 data-code="<?= e($row['code']) ?>"
                                 data-brand="<?= e($row['brand']) ?>"
@@ -379,7 +424,9 @@ $inventoryTabs = [
                 </button>
                 <div class="dropdown-menu ss-dropdown-menu">
                     <button class="dropdown-item js-inventory-purchase-location-option is-active" type="button" data-location-value="">Semua Lokasi</button>
-                    <button class="dropdown-item js-inventory-purchase-location-option" type="button" data-location-value="Star Salon">Star Salon</button>
+                    <?php foreach ($inventoryLocations as $location): ?>
+                        <button class="dropdown-item js-inventory-purchase-location-option" type="button" data-location-value="<?= e($location['name']) ?>"><?= e($location['name']) ?></button>
+                    <?php endforeach; ?>
                 </div>
             </div>
 
@@ -424,6 +471,7 @@ $inventoryTabs = [
                         <?php foreach ($purchaseRows as $row): ?>
                             <tr
                                 data-inventory-purchase-row
+                                data-purchase-id="<?= e((string) ($row['id'] ?? 0)) ?>"
                                 data-order="<?= e($row['document']) ?>"
                                 data-status="<?= e($row['status']) ?>"
                                 data-supplier="<?= e($row['supplier']) ?>"
@@ -528,12 +576,17 @@ $inventoryTabs = [
                         <?php foreach ($opnameRows as $row): ?>
                             <tr
                                 data-inventory-opname-row
+                                data-opname-id="<?= e((string) ($row['id'] ?? 0)) ?>"
                                 data-name="<?= e($row['name']) ?>"
                                 data-location="<?= e($row['location']) ?>"
                                 data-status="<?= e($row['status']) ?>"
                                 data-start="<?= e($row['started_at']) ?>"
                                 data-end="<?= e($row['ended_at']) ?>"
-                                data-note=""
+                                data-note="<?= e((string) ($row['note'] ?? '')) ?>"
+                                data-cancel-note="<?= e((string) ($row['cancelled_note'] ?? '')) ?>"
+                                data-cancelled-by="<?= e((string) ($row['cancelled_by'] ?? '')) ?>"
+                                data-started-by="<?= e((string) ($row['started_by'] ?? 'Rayhan Doni Pramana')) ?>"
+                                data-review-items="<?= e(json_encode($row['items'] ?? [], JSON_UNESCAPED_UNICODE)) ?>"
                             >
                                 <td class="inventory-name-cell">
                                     <span class="inventory-row-icon"><i class="bi bi-clipboard2-check"></i></span>
@@ -588,6 +641,7 @@ $inventoryTabs = [
                             <?php foreach ($brandRows as $row): ?>
                                 <tr
                                     data-inventory-brand-row
+                                    data-id="<?= e((string) ($row['id'] ?? 0)) ?>"
                                     data-name="<?= e($row['name']) ?>"
                                 >
                                     <td class="inventory-simple-cell"><?= e($row['name']) ?></td>
@@ -629,6 +683,7 @@ $inventoryTabs = [
                             <?php foreach ($categoryRows as $row): ?>
                                 <tr
                                     data-inventory-category-row
+                                    data-id="<?= e((string) ($row['id'] ?? 0)) ?>"
                                     data-name="<?= e($row['name']) ?>"
                                 >
                                     <td class="inventory-simple-cell"><?= e($row['name']) ?></td>
@@ -672,16 +727,17 @@ $inventoryTabs = [
                             <?php foreach ($supplierRows as $row): ?>
                                 <tr
                                     data-inventory-supplier-row
+                                    data-id="<?= e((string) ($row['id'] ?? 0)) ?>"
                                     data-name="<?= e($row['name']) ?>"
-                                    data-description=""
+                                    data-description="<?= e((string) ($row['description'] ?? '')) ?>"
                                     data-contact="<?= e($row['contact']) ?>"
-                                    data-email=""
-                                    data-phone=""
-                                    data-website=""
+                                    data-email="<?= e((string) ($row['email'] ?? '')) ?>"
+                                    data-phone="<?= e((string) ($row['phone'] ?? '')) ?>"
+                                    data-website="<?= e((string) ($row['website'] ?? '')) ?>"
                                     data-address="<?= e($row['address']) ?>"
-                                    data-city="Bangkok"
-                                    data-country="Thailand"
-                                    data-postal=""
+                                    data-city="<?= e((string) ($row['city'] ?? 'Bangkok')) ?>"
+                                    data-country="<?= e((string) ($row['country'] ?? 'Thailand')) ?>"
+                                    data-postal="<?= e((string) ($row['postal'] ?? '')) ?>"
                                 >
                                     <td class="inventory-simple-cell"><?= e($row['name']) ?></td>
                                     <td><?= e($row['contact']) ?></td>
@@ -927,13 +983,15 @@ $inventoryTabs = [
                                     <i class="bi bi-check-lg"></i>
                                 </span>
                             </label>
-                            <label class="inventory-location-item" data-location-label="Star Salon">
-                                <span>Star Salon</span>
-                                <span class="inventory-location-check">
-                                    <input type="checkbox" checked>
-                                    <i class="bi bi-check-lg"></i>
-                                </span>
-                            </label>
+                            <?php foreach ($inventoryLocations as $location): ?>
+                                <label class="inventory-location-item" data-location-label="<?= e($location['name']) ?>">
+                                    <span><?= e($location['name']) ?></span>
+                                    <span class="inventory-location-check">
+                                        <input type="checkbox" checked>
+                                        <i class="bi bi-check-lg"></i>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
                         </div>
                     </section>
                 </div>
@@ -1036,6 +1094,7 @@ $inventoryTabs = [
                             <button
                                 class="inventory-order-pick-card js-order-supplier-option"
                                 type="button"
+                                data-supplier-id="<?= e((string) ($supplier['id'] ?? 0)) ?>"
                                 data-supplier-name="<?= e($supplier['name']) ?>"
                                 data-supplier-contact="<?= e($supplier['contact']) ?>"
                                 data-supplier-address="<?= e($supplier['address']) ?>"
@@ -1050,16 +1109,19 @@ $inventoryTabs = [
 
                 <section class="inventory-order-panel" data-order-panel="location" hidden>
                     <div class="inventory-order-pick-grid inventory-order-pick-grid--single">
-                        <button
-                            class="inventory-order-pick-card js-order-location-option"
-                            type="button"
-                            data-location-name="Star Salon"
-                            data-location-address="Jl. Raya Inpres No.04, RT.4/RW.10, Kp. Tengah, Kec. Kramat jati, Kota Jakarta Timur"
-                        >
-                            <strong>Star Salon</strong>
-                            <span>Cabang aktif</span>
-                            <small>Jl. Raya Inpres No.04, RT.4/RW.10, Kp. Tengah, Kec. Kramat jati, Kota Jakarta Timur</small>
-                        </button>
+                        <?php foreach ($inventoryLocations as $location): ?>
+                            <button
+                                class="inventory-order-pick-card js-order-location-option"
+                                type="button"
+                                data-location-id="<?= e((string) ($location['id'] ?? 0)) ?>"
+                                data-location-name="<?= e($location['name']) ?>"
+                                data-location-address="<?= e((string) ($location['address'] ?? '')) ?>"
+                            >
+                                <strong><?= e($location['name']) ?></strong>
+                                <span>Cabang aktif</span>
+                                <small><?= e((string) ($location['address'] ?? '')) ?></small>
+                            </button>
+                        <?php endforeach; ?>
                     </div>
                 </section>
 
@@ -1259,15 +1321,15 @@ $inventoryTabs = [
                     <div class="inventory-opname-detail__summary-bottom">
                         <div>
                             <span>Dimulai pada</span>
-                            <strong>01 Mei 2026, 13:16</strong>
+                            <strong class="js-inventory-opname-summary-start">01 Mei 2026, 13:16</strong>
                         </div>
                         <div>
                             <span>Lokasi</span>
-                            <strong>Star Salon</strong>
+                            <strong class="js-inventory-opname-summary-location">Star Salon</strong>
                         </div>
                         <div>
                             <span>Dimulai Oleh</span>
-                            <strong>Rayhan Doni Pramana</strong>
+                            <strong class="js-inventory-opname-summary-staff">Rayhan Doni Pramana</strong>
                         </div>
                         <button class="inventory-opname-detail__review js-inventory-opname-review" type="button">Tinjau</button>
                     </div>
@@ -1297,6 +1359,7 @@ $inventoryTabs = [
                             <?php foreach ($opnameDetailProducts as $row): ?>
                                 <tr
                                     class="js-inventory-opname-detail-row"
+                                    data-product-id="<?= e((string) ($row['id'] ?? 0)) ?>"
                                     data-opname-name="<?= e($row['name']) ?>"
                                     data-opname-code="<?= e($row['code']) ?>"
                                     data-opname-sku="<?= e($row['sku']) ?>"
@@ -1427,12 +1490,16 @@ $inventoryTabs = [
                             <strong class="js-inventory-opname-review-name">Stock Opname #5</strong>
                             <span class="js-inventory-opname-review-note">Tidak ada catatan</span>
                         </div>
-                        <span class="inventory-opname-review__status js-inventory-opname-review-status">Reviewing</span>
+                        <span class="inventory-opname-review__status js-inventory-opname-review-status">Meninjau</span>
                     </div>
                     <div class="inventory-opname-review__summary-bottom">
                         <div>
                             <span>Dimulai pada</span>
                             <strong class="js-inventory-opname-review-start">01 Mei 2026, 13:16</strong>
+                        </div>
+                        <div class="js-inventory-opname-review-ended-wrap" hidden>
+                            <span>Selesai pada</span>
+                            <strong class="js-inventory-opname-review-end">01 Mei 2026, 15:21</strong>
                         </div>
                         <div>
                             <span>Lokasi</span>
@@ -1440,7 +1507,11 @@ $inventoryTabs = [
                         </div>
                         <div>
                             <span>Dimulai Oleh</span>
-                            <strong>Rayhan Doni Pramana</strong>
+                            <strong class="js-inventory-opname-review-staff">Rayhan Doni Pramana</strong>
+                        </div>
+                        <div class="js-inventory-opname-review-reviewed-wrap" hidden>
+                            <span>Diperiksa Oleh</span>
+                            <strong class="js-inventory-opname-review-reviewed-by">Rayhan Doni Pramana</strong>
                         </div>
                         <div class="inventory-opname-review__cancelled-meta js-inventory-opname-review-cancelled" hidden>
                             <span>Dibatalkan Oleh</span>
@@ -1472,10 +1543,6 @@ $inventoryTabs = [
                         <input class="js-inventory-opname-review-search" type="search" autocomplete="off" placeholder="Cari...">
                         <i class="bi bi-search"></i>
                     </label>
-                </div>
-
-                <div class="inventory-opname-review__note js-inventory-opname-review-note-box" hidden>
-                    <p class="js-inventory-opname-review-note-display"></p>
                 </div>
 
                 <section class="inventory-opname-review__table">
@@ -1525,6 +1592,20 @@ $inventoryTabs = [
             </div>
             <div class="inventory-opname-cancel-modal__footer">
                 <button type="button" class="inventory-opname-cancel-modal__submit js-inventory-opname-cancel-submit">Batal</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="inventoryOpnameCompleteModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog inventory-opname-complete-dialog">
+        <div class="modal-content inventory-opname-complete-modal">
+            <div class="inventory-opname-complete-modal__body">
+                <p>Apakah Anda yakin ingin menyelesaikan stock opname ini?</p>
+            </div>
+            <div class="inventory-opname-complete-modal__footer">
+                <button type="button" class="inventory-opname-complete-modal__cancel" data-bs-dismiss="modal">Batal</button>
+                <button type="button" class="inventory-opname-complete-modal__submit js-inventory-opname-complete-submit">Simpan</button>
             </div>
         </div>
     </div>

@@ -10,7 +10,7 @@ return [
     // Switch data source:
     // - demo: in-memory seeded data + session writes (default)
     // - db:   MySQL/MariaDB via PDO (XAMPP)
-    'data_source' => 'demo',
+    'data_source' => 'db',
     'db' => [
         'driver' => 'mysql',
         'host' => '127.0.0.1',

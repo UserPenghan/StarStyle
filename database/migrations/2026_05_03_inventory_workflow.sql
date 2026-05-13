@@ -1,0 +1,60 @@
+USE starstyle;
+
+ALTER TABLE suppliers
+    ADD COLUMN IF NOT EXISTS description TEXT NULL AFTER name,
+    ADD COLUMN IF NOT EXISTS contact_name VARCHAR(120) NULL AFTER description,
+    ADD COLUMN IF NOT EXISTS website VARCHAR(160) NULL AFTER email,
+    ADD COLUMN IF NOT EXISTS address TEXT NULL AFTER website,
+    ADD COLUMN IF NOT EXISTS city VARCHAR(120) NULL AFTER address,
+    ADD COLUMN IF NOT EXISTS country VARCHAR(120) NULL AFTER city,
+    ADD COLUMN IF NOT EXISTS postal_code VARCHAR(30) NULL AFTER country;
+
+ALTER TABLE purchase_orders
+    ADD COLUMN IF NOT EXISTS location_id BIGINT UNSIGNED NULL AFTER supplier_id,
+    ADD COLUMN IF NOT EXISTS order_type VARCHAR(30) NOT NULL DEFAULT 'Order' AFTER reference,
+    ADD COLUMN IF NOT EXISTS note TEXT NULL AFTER status,
+    ADD COLUMN IF NOT EXISTS total_amount DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER note,
+    ADD COLUMN IF NOT EXISTS ordered_at DATETIME NULL AFTER total_amount,
+    ADD COLUMN IF NOT EXISTS received_at DATETIME NULL AFTER ordered_at;
+
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    purchase_order_id BIGINT UNSIGNED NOT NULL,
+    product_id BIGINT UNSIGNED NOT NULL,
+    quantity INT NOT NULL DEFAULT 1,
+    supply_price DECIMAL(12,2) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS purchase_order_receiving_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    purchase_order_id BIGINT UNSIGNED NOT NULL,
+    product_name VARCHAR(160) NOT NULL,
+    received_qty INT NOT NULL DEFAULT 0,
+    supply_price DECIMAL(12,2) NOT NULL DEFAULT 0,
+    received_at DATETIME NOT NULL,
+    note VARCHAR(255) NULL
+);
+
+CREATE TABLE IF NOT EXISTS stock_opname_sessions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    location_id BIGINT UNSIGNED NULL,
+    name VARCHAR(160) NOT NULL,
+    note TEXT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'Meninjau',
+    started_at DATETIME NOT NULL,
+    ended_at DATETIME NULL,
+    started_by VARCHAR(120) NULL,
+    cancelled_by VARCHAR(120) NULL,
+    cancelled_note TEXT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stock_opname_session_items (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    session_id BIGINT UNSIGNED NOT NULL,
+    product_id BIGINT UNSIGNED NOT NULL,
+    expected_stock INT NOT NULL DEFAULT 0,
+    counted_stock INT NOT NULL DEFAULT 0,
+    item_status VARCHAR(30) NOT NULL DEFAULT 'counted',
+    note VARCHAR(255) NULL
+);

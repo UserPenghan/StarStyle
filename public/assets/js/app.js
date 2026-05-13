@@ -4,23 +4,32 @@ const formatCurrency = (value) => new Intl.NumberFormat("id-ID", {
     maximumFractionDigits: 0,
 }).format(value || 0);
 
+function safeInit(label, callback) {
+    try {
+        callback();
+    } catch (error) {
+        console.error(`[init] ${label}`, error);
+    }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-    initCharts();
-    initDatePickers();
-    initBookingAvailability();
-    initCalendarInteractions();
-    initCalendarEventViewer();
-    initCalendarAgendaModal();
-    initSalesTabs();
-    initCustomerTabs();
-    initStaffTabs();
-    initInventoryPage();
-    initServicesPage();
-    initVouchersPage();
-    initAnalyticsPage();
-    initReviewsPage();
-    initPOS();
-    initPermissionLoader();
+    safeInit("charts", initCharts);
+    safeInit("date-pickers", initDatePickers);
+    safeInit("booking-availability", initBookingAvailability);
+    safeInit("calendar-interactions", initCalendarInteractions);
+    safeInit("calendar-block-time-modal", initCalendarBlockTimeModal);
+    safeInit("calendar-event-viewer", initCalendarEventViewer);
+    safeInit("calendar-agenda-modal", initCalendarAgendaModal);
+    safeInit("sales-tabs", initSalesTabs);
+    safeInit("customer-tabs", initCustomerTabs);
+    safeInit("staff-tabs", initStaffTabs);
+    safeInit("inventory-page", initInventoryPage);
+    safeInit("services-page", initServicesPage);
+    safeInit("vouchers-page", initVouchersPage);
+    safeInit("analytics-page", initAnalyticsPage);
+    safeInit("reviews-page", initReviewsPage);
+    safeInit("pos", initPOS);
+    safeInit("permission-loader", initPermissionLoader);
 });
 
 function initCharts() {
@@ -287,18 +296,22 @@ function initCalendarInteractions() {
 
             timeInputs.forEach((input) => {
                 input.value = time;
+                input.dataset.slotValue = time;
             });
 
             endTimeInputs.forEach((input) => {
                 input.value = addMinutes(time, 30);
+                input.dataset.slotValue = addMinutes(time, 30);
             });
 
             dateInputs.forEach((input) => {
                 input.value = date;
+                input.dataset.slotValue = date;
             });
 
             staffInputs.forEach((input) => {
                 input.value = staffId;
+                input.dataset.slotValue = staffId;
             });
         });
     });
@@ -330,6 +343,281 @@ function addMinutes(time, minutesToAdd) {
     const nextHours = Math.floor(totalMinutes / 60) % 24;
     const nextMinutes = totalMinutes % 60;
     return `${String(nextHours).padStart(2, "0")}:${String(nextMinutes).padStart(2, "0")}`;
+}
+
+function initCalendarBlockTimeModal() {
+    const modal = document.getElementById("blockTimeModal");
+
+    if (!modal) {
+        return;
+    }
+
+    const form = modal.querySelector(".js-calendar-block-form");
+    const titleNode = modal.querySelector(".js-calendar-block-title");
+    const blockIdInput = modal.querySelector(".js-calendar-block-id");
+    const staffInput = modal.querySelector(".js-calendar-block-staff");
+    const dateInput = modal.querySelector(".js-calendar-block-date");
+    const startInput = modal.querySelector('[data-block-time-input="start"]');
+    const endInput = modal.querySelector('[data-block-time-input="end"]');
+    const descriptionInput = modal.querySelector(".js-calendar-block-description");
+    const deleteButton = modal.querySelector(".js-calendar-block-delete");
+    const saveButton = modal.querySelector(".js-calendar-block-save");
+    const timeTriggers = Array.from(modal.querySelectorAll(".js-calendar-block-time-trigger"));
+    const popover = modal.querySelector(".js-calendar-block-time-popover");
+    const hoursColumn = modal.querySelector(".js-calendar-block-time-hours");
+    const minutesColumn = modal.querySelector(".js-calendar-block-time-minutes");
+    const startDisplay = modal.querySelector('[data-block-time-display="start"]');
+    const endDisplay = modal.querySelector('[data-block-time-display="end"]');
+    const createAction = form?.getAttribute("action") || "";
+    const updateAction = createAction.replace(/\/calendar\/blocks$/, "/calendar/blocks/update");
+    const triggerButtons = Array.from(document.querySelectorAll('[data-bs-target="#blockTimeModal"]'));
+    const hours = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
+    const minutes = Array.from({ length: 12 }, (_, index) => String(index * 5).padStart(2, "0"));
+    let activeTimeTarget = "start";
+    let selectedHour = "00";
+    let selectedMinute = "00";
+    let isEditMode = false;
+    let timeSelectionStage = "hour";
+
+    const parseTime = (value) => {
+        const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
+        return match ? { hour: match[1], minute: match[2] } : { hour: "00", minute: "00" };
+    };
+
+    const compareTime = (left, right) => {
+        const [leftHour, leftMinute] = String(left || "00:00").split(":").map(Number);
+        const [rightHour, rightMinute] = String(right || "00:00").split(":").map(Number);
+        return (leftHour * 60 + leftMinute) - (rightHour * 60 + rightMinute);
+    };
+
+    const syncTimeTrigger = (target) => {
+        const input = target === "start" ? startInput : endInput;
+        const display = target === "start" ? startDisplay : endDisplay;
+        const trigger = modal.querySelector(`[data-block-time-target="${target}"]`);
+        const value = String(input?.value || "").trim();
+
+        if (display) {
+            display.textContent = value || "HH:mm";
+        }
+
+        trigger?.classList.toggle("is-placeholder", value === "");
+    };
+
+    const syncSaveState = () => {
+        const isValid = Boolean(
+            staffInput?.value
+            && dateInput?.value
+            && startInput?.value
+            && endInput?.value
+            && String(descriptionInput?.value || "").trim() !== ""
+            && compareTime(endInput?.value, startInput?.value) > 0
+        );
+
+        if (saveButton) {
+            saveButton.disabled = !isValid;
+        }
+    };
+
+    const hidePopover = () => {
+        popover?.setAttribute("hidden", "hidden");
+        timeTriggers.forEach((button) => button.classList.remove("is-open"));
+        timeSelectionStage = "hour";
+    };
+
+    const commitSelectedTime = () => {
+        const nextValue = `${selectedHour}:${selectedMinute}`;
+        if (activeTimeTarget === "start" && startInput) {
+            startInput.value = nextValue;
+            if (endInput && (!endInput.value || compareTime(endInput.value, nextValue) <= 0)) {
+                endInput.value = addMinutes(nextValue, 30);
+                syncTimeTrigger("end");
+            }
+        }
+        if (activeTimeTarget === "end" && endInput) {
+            endInput.value = nextValue;
+        }
+        syncTimeTrigger(activeTimeTarget);
+        syncSaveState();
+    };
+
+    const renderTimeOptions = () => {
+        if (!hoursColumn || !minutesColumn) {
+            return;
+        }
+
+        hoursColumn.querySelectorAll(".calendar-block-time-popover__option").forEach((node) => node.remove());
+        minutesColumn.querySelectorAll(".calendar-block-time-popover__option").forEach((node) => node.remove());
+
+        hours.forEach((hour) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = `calendar-block-time-popover__option${hour === selectedHour ? " is-active" : ""}`;
+            button.textContent = hour;
+            button.addEventListener("click", () => {
+                selectedHour = hour;
+                timeSelectionStage = "minute";
+                renderTimeOptions();
+            });
+            hoursColumn.appendChild(button);
+        });
+
+        minutes.forEach((minute) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = `calendar-block-time-popover__option${minute === selectedMinute ? " is-active" : ""}`;
+            button.textContent = minute;
+            button.addEventListener("click", () => {
+                selectedMinute = minute;
+                commitSelectedTime();
+                renderTimeOptions();
+                hidePopover();
+            });
+            minutesColumn.appendChild(button);
+        });
+    };
+
+    const openPopover = (target) => {
+        const trigger = modal.querySelector(`[data-block-time-target="${target}"]`);
+
+        if (!trigger || !popover || !form) {
+            return;
+        }
+
+        activeTimeTarget = target;
+        const currentValue = target === "start" ? startInput?.value : endInput?.value;
+        const parsed = parseTime(currentValue);
+        selectedHour = parsed.hour;
+        selectedMinute = parsed.minute;
+        timeSelectionStage = "hour";
+        renderTimeOptions();
+
+        const formRect = form.getBoundingClientRect();
+        const triggerRect = trigger.getBoundingClientRect();
+        popover.style.left = `${triggerRect.left - formRect.left}px`;
+        popover.style.top = `${triggerRect.bottom - formRect.top}px`;
+        popover.removeAttribute("hidden");
+
+        timeTriggers.forEach((button) => button.classList.toggle("is-open", button === trigger));
+    };
+
+    const resetForCreate = () => {
+        isEditMode = false;
+        form.setAttribute("action", createAction);
+        blockIdInput.value = "";
+        titleNode.textContent = "Blokir Waktu";
+        if (staffInput) {
+            staffInput.value = staffInput.dataset.slotValue || staffInput.dataset.defaultValue || "";
+        }
+        if (dateInput) {
+            dateInput.value = dateInput.dataset.slotValue || dateInput.dataset.defaultValue || "";
+        }
+        if (startInput) {
+            startInput.value = startInput.dataset.slotValue || startInput.dataset.defaultValue || "";
+        }
+        if (endInput) {
+            endInput.value = endInput.dataset.slotValue || endInput.dataset.defaultValue || "";
+        }
+        if (descriptionInput) {
+            descriptionInput.value = "";
+        }
+        if (deleteButton) {
+            deleteButton.hidden = true;
+        }
+        syncTimeTrigger("start");
+        syncTimeTrigger("end");
+        syncSaveState();
+    };
+
+    const populateFromEvent = (card) => {
+        isEditMode = true;
+        form.setAttribute("action", updateAction);
+        blockIdInput.value = card.dataset.eventId || "";
+        titleNode.textContent = "Blokir Waktu";
+        if (staffInput) {
+            staffInput.value = card.dataset.eventStaffId || "";
+        }
+        if (dateInput) {
+            dateInput.value = card.dataset.eventDate || "";
+        }
+        if (startInput) {
+            startInput.value = String(card.dataset.eventStart || "").slice(11, 16);
+        }
+        if (endInput) {
+            endInput.value = String(card.dataset.eventEnd || "").slice(11, 16);
+        }
+        if (descriptionInput) {
+            descriptionInput.value = card.dataset.eventNotes || card.dataset.eventTitle || "";
+        }
+        if (deleteButton) {
+            deleteButton.hidden = false;
+        }
+        syncTimeTrigger("start");
+        syncTimeTrigger("end");
+        syncSaveState();
+    };
+
+    triggerButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            if (button.dataset.bsTarget === "#blockTimeModal") {
+                resetForCreate();
+            }
+        });
+    });
+
+    timeTriggers.forEach((button) => {
+        button.addEventListener("click", () => {
+            const target = button.dataset.blockTimeTarget || "start";
+            if (!popover?.hasAttribute("hidden") && activeTimeTarget === target) {
+                hidePopover();
+                return;
+            }
+            openPopover(target);
+        });
+    });
+
+    [staffInput, dateInput, startInput, endInput, descriptionInput].forEach((input) => {
+        input?.addEventListener("input", syncSaveState);
+        input?.addEventListener("change", syncSaveState);
+    });
+
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const blockedCard = target.closest('[data-calendar-event="1"][data-event-type="blocked"]');
+        if (blockedCard) {
+            event.preventDefault();
+            populateFromEvent(blockedCard);
+            if (typeof bootstrap !== "undefined") {
+                bootstrap.Modal.getOrCreateInstance(modal).show();
+            }
+            return;
+        }
+
+        if (popover && !popover.hasAttribute("hidden") && !target.closest(".calendar-block-form__time-wrap") && !target.closest(".calendar-block-time-popover")) {
+            hidePopover();
+        }
+    });
+
+    modal.addEventListener("show.bs.modal", () => {
+        hidePopover();
+        if (!isEditMode) {
+            resetForCreate();
+        }
+    });
+
+    modal.addEventListener("hidden.bs.modal", () => {
+        hidePopover();
+        isEditMode = false;
+        form.setAttribute("action", createAction);
+    });
+
+    syncTimeTrigger("start");
+    syncTimeTrigger("end");
+    syncSaveState();
 }
 
 function initCalendarEventViewer() {
@@ -641,10 +929,22 @@ function initCalendarAgendaModal() {
     if (!form) {
         return;
     }
+    const agendaModalEl = form.closest(".modal");
+    const entryTriggers = Array.from(document.querySelectorAll(".js-calendar-entry-trigger[data-bs-target='#agendaModal']"));
 
     let customers = [];
     let staffOptions = [];
     let resourceOptions = [];
+    let agendaDiscountOptions = [];
+    let agendaOwnedVouchers = [];
+    let salesCatalogs = {
+        services: [],
+        packages: [],
+        products: [],
+        vouchers: [],
+        plans: [],
+        payable: [],
+    };
     try {
         customers = JSON.parse(form.dataset.customers || "[]");
     } catch (error) {
@@ -660,6 +960,32 @@ function initCalendarAgendaModal() {
     } catch (error) {
         resourceOptions = [];
     }
+    try {
+        agendaDiscountOptions = JSON.parse(form.dataset.discounts || "[]");
+    } catch (error) {
+        agendaDiscountOptions = [];
+    }
+    try {
+        agendaOwnedVouchers = JSON.parse(form.dataset.ownedVouchers || "[]");
+    } catch (error) {
+        agendaOwnedVouchers = [];
+    }
+    try {
+        salesCatalogs = {
+            ...salesCatalogs,
+            ...JSON.parse(form.dataset.salesCatalogs || "{}"),
+        };
+    } catch (error) {
+        salesCatalogs = {
+            services: [],
+            packages: [],
+            products: [],
+            vouchers: [],
+            plans: [],
+            payable: [],
+        };
+    }
+    const todayValue = form.dataset.today || "";
     const salesUrl = form.dataset.salesUrl || "/sales?tab=invoices";
 
     const serviceSearch = form.querySelector(".js-agenda-service-search");
@@ -674,6 +1000,11 @@ function initCalendarAgendaModal() {
     const agendaTitle = form.querySelector(".js-agenda-title");
     const checkoutButton = form.querySelector(".js-agenda-checkout");
     const submitButton = form.querySelector(".js-agenda-submit");
+    const salesCartToolbar = form.querySelector(".js-calendar-sales-cart-toolbar");
+    const salesCatalogTabs = Array.from(form.querySelectorAll(".js-calendar-sales-tab"));
+    const salesSubfilters = form.querySelector(".js-calendar-sales-subfilters");
+    const salesGrid = form.querySelector(".js-calendar-sales-grid");
+    const salesEmpty = form.querySelector(".js-calendar-sales-empty");
     const reviewList = form.querySelector(".js-agenda-review-list");
     const reviewTotal = form.querySelector(".js-agenda-review-total");
     const reviewAddService = form.querySelector(".js-agenda-review-add-service");
@@ -681,6 +1012,7 @@ function initCalendarAgendaModal() {
     const checkoutList = form.querySelector(".js-agenda-checkout-list");
     const checkoutBranch = form.querySelector(".js-agenda-checkout-branch");
     const checkoutSubtotal = form.querySelector(".js-agenda-checkout-subtotal");
+    const checkoutDiscountTotal = form.querySelector(".js-agenda-checkout-discount-total");
     const checkoutTotal = form.querySelector(".js-agenda-checkout-total");
     const checkoutDue = form.querySelector(".js-agenda-checkout-due");
     const checkoutPayment = form.querySelector(".js-agenda-checkout-payment");
@@ -707,6 +1039,9 @@ function initCalendarAgendaModal() {
     const invoiceA5GrandTotal = form.querySelector(".js-agenda-invoice-a5-grand-total");
     const invoiceA5Remaining = form.querySelector(".js-agenda-invoice-a5-remaining");
     const invoiceCustomer = form.querySelector(".js-agenda-invoice-customer");
+    const invoiceStatus = form.querySelector(".js-agenda-invoice-status");
+    const invoiceMeta = form.querySelector(".js-agenda-invoice-meta");
+    const invoiceActions = form.querySelector(".js-agenda-invoice-actions");
     const invoiceFormatButtons = Array.from(form.querySelectorAll(".js-agenda-invoice-format"));
     const invoiceDownload = form.querySelector(".js-agenda-invoice-download");
     const invoicePrint = form.querySelector(".js-agenda-invoice-print");
@@ -745,6 +1080,9 @@ function initCalendarAgendaModal() {
     const voidInvoiceConfirm = form.querySelector(".js-agenda-void-invoice-confirm");
     const voucherDrawer = form.querySelector(".js-agenda-voucher-drawer");
     const voucherClose = form.querySelector(".js-agenda-voucher-close");
+    const voucherSearchInput = form.querySelector(".js-agenda-voucher-search");
+    const voucherList = form.querySelector(".js-agenda-voucher-list");
+    const voucherEmpty = form.querySelector(".js-agenda-voucher-empty");
     const loyaltyDrawer = form.querySelector(".js-agenda-loyalty-drawer");
     const loyaltyClose = form.querySelector(".js-agenda-loyalty-close");
     const checkoutItemPickerOpen = form.querySelector(".js-checkout-item-picker-open");
@@ -772,6 +1110,8 @@ function initCalendarAgendaModal() {
     const dateInput = form.querySelector(".js-calendar-date-input");
     const agendaDateOpen = form.querySelector(".js-agenda-date-open");
     const agendaDateLabel = form.querySelector(".js-agenda-date-label");
+    const agendaDateOpenSecondary = form.querySelector(".js-agenda-date-open-secondary");
+    const agendaDateLabelSecondary = form.querySelector(".js-agenda-date-label-secondary");
     const agendaDatePicker = form.querySelector(".js-agenda-date-picker");
     const timeInput = form.querySelector(".js-calendar-time-input");
     const toolBackdrop = form.querySelector(".js-agenda-tool-backdrop");
@@ -786,7 +1126,9 @@ function initCalendarAgendaModal() {
     const sharedTimeSave = form.querySelector(".js-agenda-shared-time-save");
     const itemDialog = form.querySelector(".js-agenda-item-dialog");
     const itemDialogTitle = form.querySelector(".js-agenda-item-title");
-    const itemDialogDuration = form.querySelector(".js-agenda-item-duration");
+    const itemDialogSubtitle = form.querySelector(".js-agenda-item-subtitle");
+    const itemDialogChoiceTitle = form.querySelector(".js-agenda-item-choice-title");
+    const itemDialogChoiceMeta = form.querySelector(".js-agenda-item-choice-meta");
     const itemDialogPrice = form.querySelector(".js-agenda-item-price");
     const itemDialogQty = form.querySelector(".js-agenda-item-qty");
     const itemDialogMinus = form.querySelector(".js-agenda-item-minus");
@@ -825,9 +1167,14 @@ function initCalendarAgendaModal() {
     let isCheckoutItemPicker = false;
     let pendingCheckoutService = null;
     let pendingCheckoutQty = 1;
+    let pendingCheckoutTarget = "checkout";
     let paymentDraftAmount = 0;
     let isPaymentDraftDirty = false;
+    let isCurrentInvoicePaid = false;
     let activeFilter = "all";
+    let agendaEntryMode = "agenda";
+    let activeSalesCatalog = "services";
+    let activeSalesSubfilter = "all";
     let pendingSharedHour = 0;
     let pendingSharedMinute = 0;
     let isSharedTimePickerOpen = false;
@@ -835,6 +1182,77 @@ function initCalendarAgendaModal() {
     let repeatEndType = "after";
 
     const normalize = (value) => String(value || "").trim().toLowerCase();
+    const isSalesMode = () => agendaEntryMode === "sales";
+    const catalogItems = (key) => Array.isArray(salesCatalogs?.[key]) ? salesCatalogs[key] : [];
+    const salesCatalogIndex = new Map();
+    ["services", "packages", "products", "vouchers", "plans", "payable"].forEach((key) => {
+        catalogItems(key).forEach((item) => {
+            if (item?.id) {
+                salesCatalogIndex.set(`${item.kind || key.slice(0, -1)}:${item.id}`, item);
+            }
+        });
+    });
+    const findSalesCatalogItem = (type, id) => salesCatalogIndex.get(`${type}:${id}`) || null;
+    const salesTabLabel = (key) => ({
+        services: "Services",
+        packages: "Packages",
+        products: "Products",
+        vouchers: "Vouchers",
+        plans: "Plans",
+        payable: "Akan Dibayar",
+    }[key] || "Items");
+    const salesSubfilterOptions = (key) => {
+        if (key === "services") {
+            return [
+                { value: "hair-cut", label: "Hair Cut" },
+                { value: "hair-treatment", label: "Hair Treatment" },
+                { value: "hair-coloring", label: "Hair Coloring" },
+            ];
+        }
+        if (key === "packages") {
+            return [{ value: "hair-cut", label: "Hair Cut" }];
+        }
+        if (key === "products") {
+            return [{ value: "all", label: "Semua" }];
+        }
+        if (key === "vouchers") {
+            return [
+                { value: "gift", label: "Gift" },
+                { value: "service", label: "Service" },
+                { value: "class", label: "Class" },
+            ];
+        }
+        return [];
+    };
+    const syncSalesSubfilterDefault = () => {
+        const options = salesSubfilterOptions(activeSalesCatalog);
+        activeSalesSubfilter = options[0]?.value || "all";
+    };
+    const salesCardSubtitle = (item) => {
+        if (item.kind === "product") {
+            return item.variant || "";
+        }
+        if (item.kind === "package") {
+            return item.description || "";
+        }
+        return "";
+    };
+    const escapeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#039;",
+    }[char]));
+    const formatDateLabel = (value) => {
+        if (!value) {
+            return "Pilih Hari";
+        }
+        const date = new Date(`${value}T00:00:00`);
+        return Number.isNaN(date.getTime())
+            ? value
+            : date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    };
     const formatAgendaPrice = (value) => `Rp ${new Intl.NumberFormat("id-ID", {
         maximumFractionDigits: 0,
     }).format(value || 0)}`;
@@ -858,6 +1276,113 @@ function initCalendarAgendaModal() {
         const parsed = Number(normalized);
         return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     };
+    const findAgendaDiscount = (discountId) => agendaDiscountOptions.find((discount) => String(discount.id) === String(discountId)) || null;
+    const computeAgendaDiscountValue = (discount, subtotal) => {
+        const safeSubtotal = Math.max(0, Number(subtotal || 0));
+        if (!discount || safeSubtotal <= 0) {
+            return 0;
+        }
+
+        if (discount.mode === "percent") {
+            const percent = Math.max(0, Number(discount.amount || 0));
+            const maxDiscount = Math.max(0, Number(discount.max_discount || 0));
+            const rawDiscount = safeSubtotal * (percent / 100);
+            const cappedDiscount = maxDiscount > 0 ? Math.min(rawDiscount, maxDiscount) : rawDiscount;
+            return Math.min(safeSubtotal, cappedDiscount);
+        }
+
+        return Math.min(safeSubtotal, Math.max(0, Number(discount.amount || 0)));
+    };
+    const formatAgendaDiscountOption = (discount) => {
+        if (!discount) {
+            return "Select";
+        }
+
+        const amountLabel = String(discount.amount_label || "").trim();
+        return amountLabel ? `${discount.name} (${amountLabel})` : String(discount.name || "Diskon");
+    };
+    const normalizeVoucherServiceName = (value) => normalize(
+        String(value || "")
+            .replace(/\(\)/g, "")
+            .replace(/\s*-\s*$/g, "")
+            .replace(/\s+/g, " ")
+    );
+    const formatVoucherExpiryLabel = (value) => {
+        if (!value) {
+            return "";
+        }
+        const date = new Date(`${value}T00:00:00`);
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+        return date.toLocaleDateString("en-GB", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+        });
+    };
+    const activeVoucherCustomerName = () => normalize(customerNameInput?.value || "");
+    const isVoucherApplied = (voucherId) => checkoutPayments.some((payment) => payment.voucherId === voucherId);
+    const selectedServiceVoucherAmount = (voucher) => {
+        const serviceNames = Array.isArray(voucher?.service_names) ? voucher.service_names : [];
+        if (serviceNames.length === 0) {
+            return 0;
+        }
+
+        const normalizedVoucherServices = serviceNames.map(normalizeVoucherServiceName);
+        let remainingUse = Math.max(0, Number(voucher.remaining || 0));
+
+        return selectedServices().filter((service) => service.itemType === "service").reduce((sum, service) => {
+            if (remainingUse <= 0) {
+                return sum;
+            }
+
+            const matched = normalizedVoucherServices.includes(normalizeVoucherServiceName(service.name));
+            if (!matched) {
+                return sum;
+            }
+
+            const quantity = Math.max(1, Number(service.qty || 1));
+            const unitTotal = Number(service.total || 0) / quantity;
+            const appliedQty = Math.min(quantity, remainingUse);
+            remainingUse -= appliedQty;
+            return sum + (unitTotal * appliedQty);
+        }, 0);
+    };
+    const voucherPaymentAmount = (voucher) => {
+        if (!voucher) {
+            return 0;
+        }
+
+        if (voucher.type === "gift") {
+            return Math.min(
+                checkoutRemaining(),
+                Math.max(0, Number(voucher.remaining_value || 0))
+            );
+        }
+
+        return Math.min(checkoutRemaining(), selectedServiceVoucherAmount(voucher));
+    };
+    const getAvailableCustomerVouchers = () => {
+        const customerName = activeVoucherCustomerName();
+        if (!customerName || customerName === "walk-in") {
+            return [];
+        }
+
+        const selectedServiceNames = selectedServices()
+            .filter((service) => service.itemType === "service")
+            .map((service) => normalizeVoucherServiceName(service.name));
+
+        return agendaOwnedVouchers
+            .filter((voucher) => normalize(voucher.owner) === customerName)
+            .filter((voucher) => {
+                if (voucher.type !== "service") {
+                    return true;
+                }
+                const serviceNames = Array.isArray(voucher.service_names) ? voucher.service_names : [];
+                return serviceNames.some((name) => selectedServiceNames.includes(normalizeVoucherServiceName(name)));
+            });
+    };
     const formatAgendaDateLabel = (value) => {
         const date = parseDateInput(value);
         if (!date || Number.isNaN(date.getTime())) {
@@ -870,31 +1395,285 @@ function initCalendarAgendaModal() {
             year: "numeric",
         }).replace(/^0/, "");
     };
-    const escapeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        "\"": "&quot;",
-        "'": "&#039;",
-    }[char]));
+    const syncAgendaTitle = () => {
+        if (!agendaTitle) {
+            return;
+        }
+
+        if (isCheckoutMode) {
+            if (isSalesMode()) {
+                agendaTitle.textContent = "Penjualan Baru";
+                return;
+            }
+            agendaTitle.textContent = isInvoiceEditMode ? "Ubah Faktur" : "Checkout";
+            return;
+        }
+
+        agendaTitle.textContent = isSalesMode() ? "Penjualan Baru" : "Agenda Baru";
+    };
+    const syncServiceSearchPlaceholder = () => {
+        if (!serviceSearch) {
+            return;
+        }
+
+        if (isCheckoutItemPicker || isSalesMode()) {
+            serviceSearch.placeholder = "Tambahkan service, produk, atau voucher ke dalam penjualan";
+            return;
+        }
+
+        serviceSearch.placeholder = "Cari service...";
+    };
+    const syncSalesCatalogTabs = () => {
+        salesCatalogTabs.forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.salesCatalog === activeSalesCatalog);
+        });
+    };
+    const syncAgendaMode = () => {
+        form.classList.toggle("is-sales-mode", isSalesMode());
+        if (submitButton) {
+            submitButton.hidden = isSalesMode();
+        }
+        if (agendaDatePicker?._flatpickr) {
+            agendaDatePicker._flatpickr.set("maxDate", isSalesMode() && todayValue ? todayValue : null);
+        }
+        if (isSalesMode() && todayValue) {
+            setAgendaDate(dateInput?.value || todayValue);
+        }
+        syncSalesCatalogTabs();
+        syncServiceSearchPlaceholder();
+        syncAgendaTitle();
+        renderSalesSubfilters();
+        renderSalesCatalog();
+    };
+    const renderSalesSubfilters = () => {
+        if (!salesSubfilters) {
+            return;
+        }
+
+        if (!isSalesMode()) {
+            salesSubfilters.hidden = true;
+            salesSubfilters.innerHTML = "";
+            return;
+        }
+
+        const options = salesSubfilterOptions(activeSalesCatalog);
+        salesSubfilters.hidden = false;
+        if (options.length === 0) {
+            salesSubfilters.innerHTML = '<div class="calendar-sales-subfilters__list"></div><button class="calendar-sales-subfilters__toggle" type="button" aria-label="Filter"><i class="bi bi-caret-down-fill"></i></button>';
+            return;
+        }
+
+        salesSubfilters.innerHTML = `
+            <div class="calendar-sales-subfilters__list">
+                ${options.map((option) => `
+                    <button class="calendar-sales-subfilter ${option.value === activeSalesSubfilter ? "is-active" : ""}" type="button" data-sales-subfilter="${escapeHtml(option.value)}">${escapeHtml(option.label)}</button>
+                `).join("")}
+            </div>
+            <button class="calendar-sales-subfilters__toggle" type="button" aria-label="Filter"><i class="bi bi-caret-down-fill"></i></button>
+        `;
+
+        salesSubfilters.querySelectorAll("[data-sales-subfilter]").forEach((button) => {
+            button.addEventListener("click", () => {
+                activeSalesSubfilter = button.dataset.salesSubfilter || "all";
+                renderSalesSubfilters();
+                renderSalesCatalog();
+            });
+        });
+    };
+    const renderSalesCard = (item) => {
+        const priceLabel = formatAgendaPriceDecimal(item.price || item.amount || 0);
+        if (activeSalesCatalog === "payable") {
+            return `
+                <button class="calendar-sales-card" type="button">
+                    <div class="calendar-sales-card__payable">
+                        <span class="calendar-sales-card__payable-avatar" data-qty="${escapeHtml(String(item.qty || 1))}"><i class="bi bi-emoji-smile"></i></span>
+                        <div class="calendar-sales-card__body">
+                            <strong class="calendar-sales-card__payable-name">${escapeHtml(item.customer || "Walk-In")}</strong>
+                            <div class="calendar-sales-card__payable-meta">${escapeHtml(item.date || "")}</div>
+                            <div class="calendar-sales-card__payable-meta">${escapeHtml(priceLabel.replace(",00", ""))}</div>
+                        </div>
+                        <span class="calendar-sales-card__payable-badge">${escapeHtml(item.badge || "NEW")}</span>
+                    </div>
+                </button>
+            `;
+        }
+
+        if (activeSalesCatalog === "packages") {
+            return `
+                <button class="calendar-sales-card is-clickable" type="button" data-sales-card-id="${escapeHtml(String(item.id))}" data-sales-card-type="package">
+                    <div class="calendar-sales-card__package">
+                        <span class="calendar-sales-card__media">
+                            <span class="calendar-sales-card__package-dots"><span></span><span></span></span>
+                        </span>
+                        <span class="calendar-sales-card__body">
+                            <strong>${escapeHtml(item.name || "Package")}</strong>
+                            <small>${escapeHtml(item.description || "")}</small>
+                            <span class="calendar-sales-card__meta">
+                                <span>${escapeHtml(formatDurationLabel(item.duration || 0))}</span>
+                                <span class="calendar-agenda-dot"></span>
+                                <span>${escapeHtml(priceLabel)}</span>
+                            </span>
+                        </span>
+                    </div>
+                </button>
+            `;
+        }
+
+        if (activeSalesCatalog === "products") {
+            return `
+                <button class="calendar-sales-card is-clickable" type="button" data-sales-card-id="${escapeHtml(String(item.id))}" data-sales-card-type="product">
+                    <div class="calendar-sales-card__product">
+                        <span class="calendar-sales-card__media"><i class="bi bi-bottle calendar-sales-card__product-icon"></i></span>
+                        <span class="calendar-sales-card__body">
+                            <strong>${escapeHtml(`${item.name || "Product"} (${item.variant || ""})`)}</strong>
+                            <span class="calendar-sales-card__meta">
+                                <span>${escapeHtml(priceLabel)}</span>
+                                <span class="calendar-agenda-dot"></span>
+                                <span>${escapeHtml(String(item.stock || 0))}</span>
+                            </span>
+                        </span>
+                    </div>
+                </button>
+            `;
+        }
+
+        if (activeSalesCatalog === "vouchers") {
+            const badgeClass = item.badge_color === "green"
+                ? "calendar-sales-card__media calendar-sales-card__media--voucher-green"
+                : "calendar-sales-card__media calendar-sales-card__media--voucher-yellow";
+            return `
+                <button class="calendar-sales-card is-clickable" type="button" data-sales-card-id="${escapeHtml(String(item.id))}" data-sales-card-type="voucher">
+                    <div class="calendar-sales-card__voucher">
+                        <span class="${badgeClass}">${escapeHtml(item.badge || "S")}</span>
+                        <span class="calendar-sales-card__voucher-text">
+                            <strong>${escapeHtml(item.name || "Voucher")}</strong>
+                            <span>${escapeHtml(item.subtitle || "")}</span>
+                        </span>
+                    </div>
+                </button>
+            `;
+        }
+
+        return `
+            <button class="calendar-sales-card is-clickable" type="button" data-sales-card-id="${escapeHtml(String(item.id))}" data-sales-card-type="service">
+                <div class="calendar-sales-card__service">
+                    <span class="calendar-sales-card__media">${escapeHtml(String(item.initials || "SV"))}</span>
+                    <span class="calendar-sales-card__body">
+                        <strong>${escapeHtml(item.name || "Service")}</strong>
+                        <span class="calendar-sales-card__meta">
+                            <span>${escapeHtml(formatDurationLabel(item.duration || 0))}</span>
+                            <span class="calendar-agenda-dot"></span>
+                            <span>${escapeHtml(priceLabel)}</span>
+                            ${item.gender === "male" ? '<i class="bi bi-gender-male calendar-agenda-service__gender"></i>' : ""}
+                            ${item.gender === "female" ? '<i class="bi bi-gender-female calendar-agenda-service__gender"></i>' : ""}
+                        </span>
+                    </span>
+                </div>
+            </button>
+        `;
+    };
+    const renderSalesCatalog = () => {
+        if (!salesGrid || !salesEmpty) {
+            return;
+        }
+
+        if (!isSalesMode()) {
+            salesGrid.hidden = true;
+            salesEmpty.hidden = true;
+            salesGrid.innerHTML = "";
+            form.classList.remove("is-sales-empty-tab");
+            return;
+        }
+
+        let items = catalogItems(activeSalesCatalog);
+        if (activeSalesCatalog !== "payable" && activeSalesSubfilter !== "all") {
+            items = items.filter((item) => item.category === activeSalesSubfilter);
+        }
+
+        const query = normalize(serviceSearch?.value);
+        if (query) {
+            items = items.filter((item) => normalize(`${item.name || ""} ${item.description || ""} ${item.variant || ""} ${item.brand || ""}`).includes(query));
+        }
+
+        const isEmpty = items.length === 0;
+        form.classList.toggle("is-sales-empty-tab", isEmpty);
+        salesGrid.hidden = isEmpty;
+        salesEmpty.hidden = !isEmpty;
+
+        if (isEmpty) {
+            salesGrid.innerHTML = "";
+            salesEmpty.innerHTML = activeSalesCatalog === "plans"
+                ? '<div class="calendar-sales-card__no-result"><div><i class="bi bi-file-earmark-x"></i><strong>No Result</strong></div></div>'
+                : `Belum ada item pada tab ${salesTabLabel(activeSalesCatalog)}.`;
+            return;
+        }
+
+        salesEmpty.textContent = "";
+        salesGrid.innerHTML = items.map(renderSalesCard).join("");
+
+        salesGrid.querySelectorAll("[data-sales-card-id]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const type = button.dataset.salesCardType || "service";
+                const item = findSalesCatalogItem(type, button.dataset.salesCardId || "");
+                if (!item) {
+                    return;
+                }
+
+                if (type === "service" || type === "product") {
+                    showItemDialog(item, "selected");
+                    return;
+                }
+
+                selectedItems.push(createAgendaItem(item, {
+                    checkoutExpanded: selectedItems.length === 0,
+                }));
+                updateSelectedServices();
+            });
+        });
+    };
+
+    const findAgendaSourceItem = (item) => {
+        const itemType = item.itemType || "service";
+        const itemId = item.itemId || item.serviceId;
+        if (itemType === "service") {
+            const card = serviceCards.find((serviceCard) => serviceCard.dataset.serviceId === itemId);
+            if (card) {
+                return {
+                    id: card.dataset.serviceId,
+                    kind: "service",
+                    name: card.dataset.serviceName || "Layanan",
+                    price: Number(card.dataset.servicePrice || 0),
+                    duration: Number(card.dataset.serviceDuration || 60),
+                    category: card.dataset.serviceCategory || "hair-cut",
+                };
+            }
+        }
+
+        return findSalesCatalogItem(itemType, itemId);
+    };
 
     const servicesForItems = (items) => items.map((item) => {
-        const card = serviceCards.find((serviceCard) => serviceCard.dataset.serviceId === item.serviceId);
-        const fallbackDuration = Number(card?.dataset.serviceDuration || 60);
+        const itemId = item.itemId || item.serviceId;
+        const source = findAgendaSourceItem(item);
+        const fallbackDuration = Number(source?.duration || 60);
         const fallbackStaff = staffOptions[0] || { id: "", name: selectedStaffName() };
-        const basePrice = Number(card?.dataset.servicePrice || 0);
+        const basePrice = Number(source?.price || 0);
         const qty = Math.max(1, Number(item.checkoutQty || 1));
         const unitPrice = Number.isFinite(Number(item.checkoutUnitPrice))
             ? Math.max(0, Number(item.checkoutUnitPrice))
             : basePrice;
-        const discount = Math.max(0, Number(item.checkoutDiscount || 0));
         const originalTotal = basePrice * qty;
         const subtotal = unitPrice * qty;
+        const selectedDiscount = findAgendaDiscount(item.checkoutDiscountId);
+        const discount = selectedDiscount
+            ? computeAgendaDiscountValue(selectedDiscount, subtotal)
+            : Math.max(0, Number(item.checkoutDiscount || 0));
 
         return {
             instanceId: item.instanceId,
-            id: item.serviceId,
-            name: card?.dataset.serviceName || "Layanan",
+            id: itemId,
+            itemType: item.itemType || source?.kind || "service",
+            name: source?.name || item.name || "Layanan",
             price: basePrice,
             unitPrice,
             qty,
@@ -902,13 +1681,17 @@ function initCalendarAgendaModal() {
             subtotal,
             originalTotal,
             total: Math.max(0, subtotal - discount),
+            appliedDiscountId: selectedDiscount ? String(selectedDiscount.id) : "",
+            appliedDiscountLabel: selectedDiscount ? formatAgendaDiscountOption(selectedDiscount) : "",
             duration: Number(item.duration || fallbackDuration),
             startTime: item.startTime || "",
             staffId: item.staffId || String(fallbackStaff.id || ""),
-            staffName: item.staffName || fallbackStaff.name || selectedStaffName(),
+            staffName: item.itemType === "service" ? (item.staffName || fallbackStaff.name || selectedStaffName()) : "",
             resourceId: item.resourceId || "",
             resourceName: item.resourceName || "Select",
             checkoutExpanded: item.checkoutExpanded,
+            subtitle: salesCardSubtitle(source || {}),
+            stock: Number(source?.stock || 0),
         };
     });
 
@@ -926,7 +1709,7 @@ function initCalendarAgendaModal() {
         serviceInputContainer.innerHTML = "";
         const agendaStart = timeInput?.value || "09:00";
         let nextStart = agendaStart;
-        selectedServices().forEach((service) => {
+        selectedServices().filter((service) => service.itemType === "service").forEach((service) => {
             const startTime = service.startTime || (useSharedStartTime ? agendaStart : nextStart);
             if (!useSharedStartTime) {
                 nextStart = addMinutes(startTime, service.duration);
@@ -956,12 +1739,16 @@ function initCalendarAgendaModal() {
     };
 
     const servicePayload = (card) => ({
-            id: card.dataset.serviceId,
-            name: card.dataset.serviceName || "Layanan",
-            price: Number(card.dataset.servicePrice || 0),
-            duration: Number(card.dataset.serviceDuration || 60),
+        id: card.dataset.serviceId,
+        kind: "service",
+        name: card.dataset.serviceName || "Layanan",
+        price: Number(card.dataset.servicePrice || 0),
+        duration: Number(card.dataset.serviceDuration || 60),
+        category: card.dataset.serviceCategory || "hair-cut",
     });
 
+    const selectedSubtotal = () => selectedServices().reduce((sum, service) => sum + (service.subtotal ?? service.price), 0);
+    const selectedDiscountAmount = () => selectedServices().reduce((sum, service) => sum + (service.discount || 0), 0);
     const selectedTotal = () => selectedServices().reduce((sum, service) => sum + (service.total ?? service.price), 0);
     const checkoutPendingTotal = () => checkoutPendingServices().reduce((sum, service) => sum + (service.total ?? service.price), 0);
 
@@ -1037,9 +1824,12 @@ function initCalendarAgendaModal() {
     const createAgendaItem = (service, options = {}) => ({
         instanceId: `${service.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         serviceId: service.id,
+        itemId: service.id,
+        itemType: service.kind || "service",
+        name: service.name || "Layanan",
         duration: service.duration,
         staffId: String(staffOptions[0]?.id || ""),
-        staffName: staffOptions[0]?.name || selectedStaffName(),
+        staffName: (service.kind || "service") === "service" ? (staffOptions[0]?.name || selectedStaffName()) : "",
         resourceId: "",
         resourceName: "Select",
         collapsed: false,
@@ -1076,6 +1866,7 @@ function initCalendarAgendaModal() {
         }
         pendingCheckoutService = null;
         pendingCheckoutQty = 1;
+        pendingCheckoutTarget = "checkout";
     };
 
     const closeAgendaTools = () => {
@@ -1123,14 +1914,21 @@ function initCalendarAgendaModal() {
     };
 
     const setAgendaDate = (value) => {
+        let nextValue = value;
+        if (isSalesMode() && todayValue && nextValue && nextValue > todayValue) {
+            nextValue = todayValue;
+        }
         if (dateInput) {
-            dateInput.value = value;
+            dateInput.value = nextValue;
         }
         if (agendaDatePicker) {
-            agendaDatePicker.value = value;
+            agendaDatePicker.value = nextValue;
         }
         if (agendaDateLabel) {
-            agendaDateLabel.textContent = formatAgendaDateLabel(value);
+            agendaDateLabel.textContent = formatAgendaDateLabel(nextValue);
+        }
+        if (agendaDateLabelSecondary) {
+            agendaDateLabelSecondary.textContent = formatAgendaDateLabel(nextValue);
         }
     };
 
@@ -1432,6 +2230,97 @@ function initCalendarAgendaModal() {
         renderPaymentList(checkoutPaymentList);
         renderPaymentList(invoicePaymentList);
     };
+    const renderVoucherDrawer = () => {
+        if (!voucherList || !voucherEmpty) {
+            return;
+        }
+
+        const query = normalize(voucherSearchInput?.value);
+        const vouchers = getAvailableCustomerVouchers().filter((voucher) => {
+            const serviceLabel = voucher.type === "service" ? String(voucher.service_label || "") : "";
+            const haystack = normalize(`${voucher.name || ""} ${voucher.code || ""} ${serviceLabel}`);
+            return !query || haystack.includes(query);
+        });
+
+        voucherList.innerHTML = "";
+
+        vouchers.forEach((voucher) => {
+            const exhausted = voucher.type === "gift"
+                ? Math.max(0, Number(voucher.remaining_value || 0)) <= 0
+                : Math.max(0, Number(voucher.remaining || 0)) <= 0;
+            const alreadyApplied = isVoucherApplied(voucher.id);
+            const amount = voucherPaymentAmount(voucher);
+            const disabled = exhausted || alreadyApplied || amount <= 0;
+            const card = document.createElement("button");
+            const isGift = voucher.type === "gift";
+            const titleClass = isGift
+                ? "calendar-agenda-voucher-card__title calendar-agenda-voucher-card__title--gift"
+                : "calendar-agenda-voucher-card__title";
+            const ticketClass = isGift
+                ? "calendar-agenda-voucher-ticket calendar-agenda-voucher-ticket--gift"
+                : "calendar-agenda-voucher-ticket";
+            const valueLabel = isGift
+                ? `${formatAgendaPriceDecimal(voucher.remaining_value || 0).replace(",00", "")} Tersisa`
+                : `${Math.max(0, Number(voucher.remaining || 0))}/${Math.max(0, Number(voucher.total || 0))}`;
+
+            card.type = "button";
+            card.className = `calendar-agenda-voucher-card${disabled ? " is-disabled" : ""}`;
+            card.disabled = disabled;
+            card.dataset.voucherId = voucher.id;
+            card.innerHTML = `
+                <div class="calendar-agenda-voucher-card__head">
+                    <strong class="calendar-agenda-voucher-card__type">${escapeHtml(voucher.type_label || "Voucher")}</strong>
+                    <span class="calendar-agenda-voucher-card__expiry">Berlaku hingga ${escapeHtml(formatVoucherExpiryLabel(voucher.expiry_date))}</span>
+                </div>
+                <div class="calendar-agenda-voucher-card__body">
+                    <span class="${ticketClass}">${isGift ? "G" : "S"}</span>
+                    <div class="calendar-agenda-voucher-card__content">
+                        <p class="${titleClass}">${escapeHtml(voucher.name || "Voucher")}${isGift ? "" : ` (${escapeHtml(voucher.service_label || "")})`}</p>
+                        <p class="calendar-agenda-voucher-card__value">${escapeHtml(valueLabel)}</p>
+                    </div>
+                </div>
+                <div class="calendar-agenda-voucher-card__footer">${escapeHtml(voucher.location || "Star Salon")}</div>
+            `;
+            voucherList.append(card);
+        });
+
+        const shouldShowEmpty = vouchers.length === 0;
+        const emptyTitle = voucherEmpty.querySelector("strong");
+        if (emptyTitle) {
+            emptyTitle.textContent = activeVoucherCustomerName() && activeVoucherCustomerName() !== "walk-in"
+                ? "No Result"
+                : "Pilih customer dulu";
+        }
+        voucherEmpty.hidden = !shouldShowEmpty;
+        voucherList.hidden = shouldShowEmpty;
+
+        voucherList.querySelectorAll("[data-voucher-id]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const voucher = getAvailableCustomerVouchers().find((item) => item.id === button.dataset.voucherId);
+                if (!voucher || isVoucherApplied(voucher.id)) {
+                    return;
+                }
+
+                const amount = voucherPaymentAmount(voucher);
+                if (!amount) {
+                    return;
+                }
+
+                checkoutPayments.push({
+                    id: `voucher-${voucher.id}-${Date.now()}`,
+                    method: `VOUCHER - ${voucher.name}`,
+                    amount,
+                    voucherId: voucher.id,
+                });
+                isPaymentDraftDirty = false;
+                if (voucherDrawer) {
+                    voucherDrawer.hidden = true;
+                }
+                updateCheckoutTotalsDisplay();
+                renderVoucherDrawer();
+            });
+        });
+    };
 
     const closeCheckoutMoreMenu = () => {
         if (!checkoutMoreMenu || !checkoutMoreToggle) {
@@ -1529,7 +2418,8 @@ function initCalendarAgendaModal() {
             "Faktur",
             `Customer: ${customerNameInput?.value?.trim() || "Walk-In"}`,
             ...lines,
-            `Sub Total: ${formatAgendaPriceDecimal(selectedTotal())}`,
+            `Sub Total: ${formatAgendaPriceDecimal(selectedSubtotal())}`,
+            `Diskon: ${formatAgendaPriceDecimal(selectedDiscountAmount())}`,
             `Total: ${formatAgendaPriceDecimal(selectedTotal())}`,
             `Sisa pembayaran: ${formatAgendaPriceDecimal(checkoutRemaining())}`,
         ].join("\n");
@@ -1550,8 +2440,12 @@ function initCalendarAgendaModal() {
 
     const renderInvoiceView = () => {
         const services = selectedServices();
+        const subtotal = selectedSubtotal();
         const total = selectedTotal();
         const remaining = checkoutRemaining();
+        const invoiceDateText = formatAgendaDateLabel(dateInput?.value || initialAgendaDate);
+        const invoiceTimeText = timeInput?.value || "00:00";
+        const isPaid = isCurrentInvoicePaid || (total > 0 && remaining <= 0);
 
         if (invoiceItems) {
             invoiceItems.innerHTML = services.map((service) => `
@@ -1580,7 +2474,7 @@ function initCalendarAgendaModal() {
                         </td>
                         <td>${escapeHtml(String(qty))}</td>
                         <td>${formatAgendaPriceDecimal(unitPrice).replace("Rp ", "")}</td>
-                        <td>0</td>
+                        <td>${service.discount ? formatAgendaPriceDecimal(service.discount).replace("Rp ", "") : "0"}</td>
                         <td></td>
                         <td>${formatAgendaPriceDecimal(service.total).replace("Rp ", "")}</td>
                     </tr>
@@ -1588,12 +2482,12 @@ function initCalendarAgendaModal() {
             }).join("");
         }
 
-        [invoiceSubtotal, invoiceTotal, invoiceGrandTotal].forEach((target) => {
+        [invoiceSubtotal, invoiceA5Subtotal].forEach((target) => {
             if (target) {
-                target.textContent = formatAgendaPriceDecimal(total);
+                target.textContent = formatAgendaPriceDecimal(subtotal);
             }
         });
-        [invoiceA5Subtotal, invoiceA5Total, invoiceA5GrandTotal].forEach((target) => {
+        [invoiceTotal, invoiceGrandTotal, invoiceA5Total, invoiceA5GrandTotal].forEach((target) => {
             if (target) {
                 target.textContent = formatAgendaPriceDecimal(total);
             }
@@ -1606,6 +2500,29 @@ function initCalendarAgendaModal() {
         }
         if (invoiceCustomer) {
             invoiceCustomer.textContent = customerNameInput?.value?.trim() || "Walk-In";
+        }
+        if (invoiceStatus) {
+            invoiceStatus.textContent = isPaid ? "PAID" : "UNPAID";
+            invoiceStatus.classList.toggle("is-paid", isPaid);
+        }
+        if (invoiceMeta) {
+            invoiceMeta.innerHTML = isPaid
+                ? `
+                    <div>Dibuat pada ${escapeHtml(`${invoiceDateText} ${invoiceTimeText}`)}</div>
+                    <div>Dilunasi pada ${escapeHtml(`${invoiceDateText} ${invoiceTimeText}`)}</div>
+                    <div>di ${escapeHtml(branchInput?.value || initialBranchName)} Oleh Rayhan Doni Pramana dari POINT OF SALE</div>
+                `
+                : `
+                    <div>Dibuat pada ${escapeHtml(`${invoiceDateText} ${invoiceTimeText}`)}</div>
+                    <div>Tanggal jatuh tempo faktur ${escapeHtml(invoiceDateText)}</div>
+                    <div>di ${escapeHtml(branchInput?.value || initialBranchName)} Oleh Rayhan Doni Pramana dari POINT OF SALE</div>
+                `;
+        }
+        if (invoicePayNow) {
+            invoicePayNow.hidden = isPaid;
+        }
+        if (invoiceActions) {
+            invoiceActions.classList.toggle("is-paid", isPaid);
         }
         const shareUrl = invoiceShareUrl();
         const shareText = `${invoiceShareText()}\n${shareUrl}`;
@@ -1677,7 +2594,11 @@ function initCalendarAgendaModal() {
     };
 
     const updateCheckoutTotalsDisplay = () => {
+        const subtotal = selectedSubtotal();
+        const discount = selectedDiscountAmount();
         const total = selectedTotal();
+        const subtotalText = formatAgendaPriceDecimal(subtotal);
+        const discountText = formatAgendaPriceDecimal(discount);
         const totalText = formatAgendaPriceDecimal(total);
         const paid = checkoutPaidTotal();
         const remaining = checkoutRemaining();
@@ -1688,7 +2609,10 @@ function initCalendarAgendaModal() {
             checkoutBranch.textContent = branchInput?.value || initialBranchName;
         }
         if (checkoutSubtotal) {
-            checkoutSubtotal.textContent = totalText;
+            checkoutSubtotal.textContent = subtotalText;
+        }
+        if (checkoutDiscountTotal) {
+            checkoutDiscountTotal.textContent = discountText;
         }
         if (checkoutTotal) {
             checkoutTotal.textContent = totalText;
@@ -1764,22 +2688,35 @@ function initCalendarAgendaModal() {
             const item = selectedItems.find((selectedItem) => selectedItem.instanceId === service.instanceId);
             const isExpanded = item?.checkoutExpanded ?? index === 0;
             const safeServiceName = escapeHtml(service.name);
-            const safeStaffName = escapeHtml(service.staffName);
             const priceText = formatAgendaPriceDecimal(service.total);
             const unitPriceText = formatAgendaPriceDecimal(service.unitPrice);
-            const discountText = service.discount > 0 ? formatAgendaPriceDecimal(service.discount) : "";
+            const showStaffField = !["voucher", "gift"].includes(service.itemType);
+            const detailLabel = service.itemType === "service"
+                ? `${priceText} | dengan ${escapeHtml(service.staffName)}`
+                : priceText;
+            const avatarHtml = service.itemType === "product"
+                ? '<i class="bi bi-bottle"></i>'
+                : '<span></span>';
             const effectiveStaffOptions = staffOptions.length > 0
                 ? staffOptions
                 : [{ id: service.staffId || "", name: service.staffName || selectedStaffName() }];
             const staffOptionsHtml = effectiveStaffOptions.map((staff) => `
                 <option value="${escapeHtml(staff.id)}" ${String(staff.id) === String(service.staffId) ? "selected" : ""}>${escapeHtml(staff.name)}</option>
             `).join("");
+            const discountOptionsHtml = [
+                `<option value="" ${service.appliedDiscountId ? "" : "selected"}>Select</option>`,
+                ...agendaDiscountOptions.map((discount) => `
+                    <option value="${escapeHtml(String(discount.id))}" ${String(discount.id) === String(service.appliedDiscountId || "") ? "selected" : ""}>
+                        ${escapeHtml(formatAgendaDiscountOption(discount))}
+                    </option>
+                `),
+            ].join("");
             card.className = `calendar-agenda-checkout-card ${isExpanded ? "is-expanded" : ""}`;
             card.innerHTML = `
-                <span class="calendar-agenda-checkout-avatar"></span>
+                <span class="calendar-agenda-checkout-avatar">${avatarHtml}</span>
                 <button class="calendar-agenda-checkout-main" type="button" data-checkout-toggle="${escapeHtml(service.instanceId)}" aria-label="Buka tutup ${safeServiceName}">
                     <strong>${safeServiceName}</strong>
-                    <small>${priceText} | dengan ${safeStaffName}</small>
+                    <small>${detailLabel}</small>
                 </button>
                 <span class="calendar-agenda-checkout-price">${renderCheckoutPriceStack(service)}</span>
                 <button class="calendar-agenda-checkout-remove" type="button" data-checkout-remove="${escapeHtml(service.instanceId)}" aria-label="Hapus ${safeServiceName}">
@@ -1798,25 +2735,23 @@ function initCalendarAgendaModal() {
                             <label>Kuantitas</label>
                             <input class="calendar-agenda-checkout-control" type="number" min="1" step="1" inputmode="numeric" value="${service.qty}" data-checkout-qty="${escapeHtml(service.instanceId)}">
                         </div>
+                        ${showStaffField ? `
                         <div class="calendar-agenda-checkout-field">
                             <label>Staff</label>
                             <select class="calendar-agenda-checkout-control" data-checkout-staff="${escapeHtml(service.instanceId)}">
                                 ${staffOptionsHtml}
                             </select>
                         </div>
+                        ` : ""}
                         <div class="calendar-agenda-checkout-field">
                             <label>Harga</label>
                             <input class="calendar-agenda-checkout-control" type="text" inputmode="numeric" value="${unitPriceText}" data-checkout-price="${escapeHtml(service.instanceId)}">
                         </div>
                         <div class="calendar-agenda-checkout-field calendar-agenda-checkout-discount-field">
                             <label>Diskon</label>
-                            <input class="calendar-agenda-checkout-control ${discountText ? "" : "is-muted"}" type="text" inputmode="numeric" placeholder="Select" value="${discountText}" data-checkout-discount="${escapeHtml(service.instanceId)}">
-                            <div class="calendar-agenda-checkout-dropdown" hidden>
-                                <button type="button" data-discount-value="0">Tanpa diskon</button>
-                                <button type="button" data-discount-value="10000">Rp 10.000,00</button>
-                                <button type="button" data-discount-value="20000">Rp 20.000,00</button>
-                                <button type="button" data-discount-value="50000">Rp 50.000,00</button>
-                            </div>
+                            <select class="calendar-agenda-checkout-control ${service.appliedDiscountId ? "" : "is-muted"}" data-checkout-discount="${escapeHtml(service.instanceId)}">
+                                ${discountOptionsHtml}
+                            </select>
                         </div>
                     </div>
                 ` : ""}
@@ -1831,11 +2766,12 @@ function initCalendarAgendaModal() {
             }
 
             const priceText = formatAgendaPriceDecimal(service.total);
-            const staffText = escapeHtml(service.staffName);
             const mainSmall = card.querySelector(".calendar-agenda-checkout-main small");
             const priceStack = card.querySelector(".calendar-agenda-checkout-price");
             if (mainSmall) {
-                mainSmall.innerHTML = `${priceText} | dengan ${staffText}`;
+                mainSmall.innerHTML = service.itemType === "service"
+                    ? `${priceText} | dengan ${escapeHtml(service.staffName)}`
+                    : priceText;
             }
             if (priceStack) {
                 priceStack.innerHTML = renderCheckoutPriceStack(service);
@@ -1931,51 +2867,23 @@ function initCalendarAgendaModal() {
             });
         });
 
-        checkoutList.querySelectorAll("[data-checkout-discount]").forEach((input) => {
-            const field = input.closest(".calendar-agenda-checkout-discount-field");
-            const dropdown = field?.querySelector(".calendar-agenda-checkout-dropdown");
+        checkoutList.querySelectorAll("[data-checkout-discount]").forEach((select) => {
             const applyDiscount = () => {
-                const item = selectedItems.find((selectedItem) => selectedItem.instanceId === input.dataset.checkoutDiscount);
+                const item = selectedItems.find((selectedItem) => selectedItem.instanceId === select.dataset.checkoutDiscount);
                 if (!item) {
                     return;
                 }
 
-                item.checkoutDiscount = parseAgendaPriceInput(input.value);
-                input.classList.toggle("is-muted", item.checkoutDiscount <= 0);
-                refreshCheckoutCard(input.closest(".calendar-agenda-checkout-card"), item);
+                const selectedDiscount = findAgendaDiscount(select.value);
+                item.checkoutDiscountId = selectedDiscount ? String(selectedDiscount.id) : "";
+                item.checkoutDiscount = selectedDiscount
+                    ? computeAgendaDiscountValue(selectedDiscount, Math.max(0, Number(item.checkoutUnitPrice || 0)) * Math.max(1, Number(item.checkoutQty || 1)))
+                    : 0;
+                select.classList.toggle("is-muted", !item.checkoutDiscountId);
+                refreshCheckoutCard(select.closest(".calendar-agenda-checkout-card"), item);
             };
 
-            input.addEventListener("focus", () => {
-                checkoutList.querySelectorAll(".calendar-agenda-checkout-dropdown").forEach((menu) => {
-                    if (menu !== dropdown) {
-                        menu.hidden = true;
-                    }
-                });
-                if (dropdown) {
-                    dropdown.hidden = false;
-                }
-            });
-            input.addEventListener("input", applyDiscount);
-            input.addEventListener("change", () => {
-                applyDiscount();
-                const item = selectedItems.find((selectedItem) => selectedItem.instanceId === input.dataset.checkoutDiscount);
-                const service = item ? servicesForItems([item])[0] : null;
-                input.value = service?.discount ? formatAgendaPriceDecimal(service.discount) : "";
-            });
-            dropdown?.querySelectorAll("[data-discount-value]").forEach((option) => {
-                option.addEventListener("click", () => {
-                    const item = selectedItems.find((selectedItem) => selectedItem.instanceId === input.dataset.checkoutDiscount);
-                    if (!item) {
-                        return;
-                    }
-
-                    item.checkoutDiscount = Number(option.dataset.discountValue || 0);
-                    input.value = item.checkoutDiscount > 0 ? formatAgendaPriceDecimal(item.checkoutDiscount) : "";
-                    input.classList.toggle("is-muted", item.checkoutDiscount <= 0);
-                    dropdown.hidden = true;
-                    refreshCheckoutCard(input.closest(".calendar-agenda-checkout-card"), item);
-                });
-            });
+            select.addEventListener("change", applyDiscount);
         });
     };
 
@@ -1999,13 +2907,15 @@ function initCalendarAgendaModal() {
         selectedPanel?.classList.toggle("is-checkout-picker", isCheckoutItemPicker);
 
         if (summary) {
-            summary.textContent = isCheckoutItemPicker
+            summary.textContent = (isCheckoutItemPicker || isSalesMode())
                 ? `${count} items \u2022 ${formatAgendaPriceDecimal(total)}`
                 : `${count} Layanan \u2022 ${formatAgendaPrice(total)}`;
         }
 
         if (footerAction) {
-            footerAction.textContent = isCheckoutItemPicker ? `Tambahkan ${count} items` : `Tambahkan ${count} Layanan`;
+            footerAction.textContent = (isCheckoutItemPicker || isSalesMode())
+                ? `Tambahkan ${count} items`
+                : `Tambahkan ${count} Layanan`;
             footerAction.disabled = count === 0;
         }
 
@@ -2026,6 +2936,7 @@ function initCalendarAgendaModal() {
         }
 
         form.classList.toggle("is-empty-review", isReviewMode && count === 0);
+        renderVoucherDrawer();
     };
 
     const renderReviewRows = () => {
@@ -2289,9 +3200,6 @@ function initCalendarAgendaModal() {
             if (checkoutPayment) {
                 checkoutPayment.hidden = true;
             }
-            if (agendaTitle) {
-                agendaTitle.textContent = "Agenda Baru";
-            }
         }
         if (isReviewMode) {
             renderReviewRows();
@@ -2303,6 +3211,7 @@ function initCalendarAgendaModal() {
             closeAgendaTools();
         }
         updateSelectedServices();
+        syncAgendaTitle();
     };
 
     const setCheckoutCustomerSearch = (enabled) => {
@@ -2326,13 +3235,12 @@ function initCalendarAgendaModal() {
             closeAgendaTools();
             if (serviceSearch) {
                 serviceSearch.value = "";
-                serviceSearch.placeholder = "Tambahkan service, produk, atau voucher ke dalam penjualan";
                 serviceSearch.focus();
             }
         } else if (serviceSearch) {
             serviceSearch.value = "";
-            serviceSearch.placeholder = "Cari service...";
         }
+        syncServiceSearchPlaceholder();
         applyServiceFilters();
         updateSelectedServices();
     };
@@ -2345,8 +3253,22 @@ function initCalendarAgendaModal() {
         if (itemDialogTitle) {
             itemDialogTitle.textContent = pendingCheckoutService.name;
         }
-        if (itemDialogDuration) {
-            itemDialogDuration.textContent = `(${formatDurationLabel(pendingCheckoutService.duration)})`;
+        if (itemDialogSubtitle) {
+            const subtitle = String(pendingCheckoutService.brand || "").trim();
+            itemDialogSubtitle.hidden = !subtitle;
+            itemDialogSubtitle.textContent = subtitle;
+        }
+        if (itemDialogChoiceTitle) {
+            itemDialogChoiceTitle.textContent = pendingCheckoutService.kind === "product"
+                ? String(pendingCheckoutService.variant || "Default")
+                : `(${formatDurationLabel(pendingCheckoutService.duration)})`;
+        }
+        if (itemDialogChoiceMeta) {
+            const meta = pendingCheckoutService.kind === "product"
+                ? `Stok: ${Math.max(0, Number(pendingCheckoutService.stock || 0))}`
+                : "";
+            itemDialogChoiceMeta.hidden = !meta;
+            itemDialogChoiceMeta.textContent = meta;
         }
         if (itemDialogPrice) {
             itemDialogPrice.textContent = formatAgendaPriceDecimal(pendingCheckoutService.price);
@@ -2359,7 +3281,7 @@ function initCalendarAgendaModal() {
         }
     };
 
-    const showItemDialog = (service) => {
+    const showItemDialog = (service, target = "checkout") => {
         if (!itemDialog || !toolBackdrop) {
             return;
         }
@@ -2369,6 +3291,7 @@ function initCalendarAgendaModal() {
         hideRepeatDialog();
         pendingCheckoutService = service;
         pendingCheckoutQty = 1;
+        pendingCheckoutTarget = target;
         toolBackdrop.hidden = false;
         itemDialog.hidden = false;
         renderItemDialog();
@@ -2401,9 +3324,10 @@ function initCalendarAgendaModal() {
         if (checkoutPayment) {
             checkoutPayment.hidden = !isCheckoutMode;
         }
-        if (agendaTitle) {
-            agendaTitle.textContent = isCheckoutMode ? (isInvoiceEditMode ? "Ubah Faktur" : "Checkout") : "Agenda Baru";
+        if (salesCartToolbar) {
+            salesCartToolbar.hidden = !(isCheckoutMode && isSalesMode());
         }
+        syncAgendaTitle();
         if (isCheckoutMode) {
             if (!wasCheckoutMode) {
                 checkoutPayments.splice(0, checkoutPayments.length);
@@ -2428,6 +3352,10 @@ function initCalendarAgendaModal() {
     };
 
     const applyServiceFilters = () => {
+        if (isSalesMode()) {
+            renderSalesCatalog();
+            return;
+        }
         const query = normalize(serviceSearch?.value);
         serviceCards.forEach((card) => {
             const matchesFilter = activeFilter === "all" || card.dataset.serviceCategory === activeFilter;
@@ -2482,6 +3410,20 @@ function initCalendarAgendaModal() {
 
     agendaDateOpen?.addEventListener("click", () => {
         closeAgendaTools();
+        if (agendaDatePicker?._flatpickr) {
+            agendaDatePicker._flatpickr.set("positionElement", agendaDateOpen);
+        }
+        agendaDatePicker?._flatpickr?.open();
+        if (!agendaDatePicker?._flatpickr) {
+            agendaDatePicker?.focus();
+        }
+    });
+
+    agendaDateOpenSecondary?.addEventListener("click", () => {
+        closeAgendaTools();
+        if (agendaDatePicker?._flatpickr) {
+            agendaDatePicker._flatpickr.set("positionElement", agendaDateOpenSecondary);
+        }
         agendaDatePicker?._flatpickr?.open();
         if (!agendaDatePicker?._flatpickr) {
             agendaDatePicker?.focus();
@@ -2610,7 +3552,38 @@ function initCalendarAgendaModal() {
             updateSelectedServices();
             return;
         }
+        if (isSalesMode()) {
+            isInvoiceEditMode = false;
+            setCheckoutMode(true);
+            return;
+        }
         setReviewMode(true);
+    });
+
+    entryTriggers.forEach((trigger) => {
+        trigger.addEventListener("click", () => {
+            agendaEntryMode = trigger.dataset.entryMode === "sales" ? "sales" : "agenda";
+            activeSalesCatalog = "services";
+            syncSalesSubfilterDefault();
+            syncAgendaMode();
+        });
+    });
+
+    salesCatalogTabs.forEach((button) => {
+        button.addEventListener("click", () => {
+            activeSalesCatalog = button.dataset.salesCatalog || "services";
+            syncSalesSubfilterDefault();
+            syncAgendaMode();
+            if (activeSalesCatalog === "payable" && selectedItems.length > 0) {
+                setCheckoutMode(true);
+                return;
+            }
+            if (isCheckoutMode) {
+                setCheckoutMode(false);
+            } else {
+                updateSelectedServices();
+            }
+        });
     });
 
     checkoutButton?.addEventListener("click", () => {
@@ -2639,8 +3612,10 @@ function initCalendarAgendaModal() {
     const addPayment = (method) => {
         if (method === "VOUCHER") {
             if (voucherDrawer) {
+                renderVoucherDrawer();
                 voucherDrawer.hidden = false;
             }
+            voucherSearchInput?.focus();
             return;
         }
 
@@ -2686,9 +3661,10 @@ function initCalendarAgendaModal() {
         try {
             window.localStorage.setItem("starSalonLastPaidInvoice", JSON.stringify(paidInvoice));
         } catch (error) {
-            // Local storage may be disabled; still navigate to the sales module.
+            // Local storage may be disabled; still show the invoice view.
         }
-        window.location.href = salesUrl;
+        isCurrentInvoicePaid = true;
+        showInvoiceView();
     };
 
     [...checkoutPaymentButtons, ...invoicePaymentButtons].forEach((button) => {
@@ -2791,6 +3767,7 @@ function initCalendarAgendaModal() {
         hideInvoiceView();
         checkoutPayments.splice(0, checkoutPayments.length);
         isPaymentDraftDirty = false;
+        isCurrentInvoicePaid = false;
         isInvoiceEditMode = true;
         setCheckoutMode(true);
     });
@@ -2850,16 +3827,31 @@ function initCalendarAgendaModal() {
         if (voucherDrawer) {
             voucherDrawer.hidden = true;
         }
+        if (voucherSearchInput) {
+            voucherSearchInput.value = "";
+        }
     });
 
     voucherDrawer?.addEventListener("click", (event) => {
         if (event.target === voucherDrawer) {
             voucherDrawer.hidden = true;
+            if (voucherSearchInput) {
+                voucherSearchInput.value = "";
+            }
         }
+    });
+
+    voucherSearchInput?.addEventListener("input", () => {
+        renderVoucherDrawer();
     });
 
     checkoutItemPickerOpen?.addEventListener("click", () => {
         checkoutPendingItems.splice(0, checkoutPendingItems.length);
+        if (isSalesMode()) {
+            activeSalesCatalog = "services";
+            syncSalesSubfilterDefault();
+            syncAgendaMode();
+        }
         setCheckoutItemPicker(true);
     });
 
@@ -2892,7 +3884,14 @@ function initCalendarAgendaModal() {
         }
 
         Array.from({ length: pendingCheckoutQty }).forEach(() => {
-            checkoutPendingItems.push(createAgendaItem(pendingCheckoutService));
+            const nextItem = createAgendaItem(pendingCheckoutService, {
+                checkoutExpanded: selectedItems.length === 0 && pendingCheckoutTarget === "selected",
+            });
+            if (pendingCheckoutTarget === "selected") {
+                selectedItems.push(nextItem);
+            } else {
+                checkoutPendingItems.push(nextItem);
+            }
         });
         hideItemDialog();
         updateSelectedServices();
@@ -2974,6 +3973,7 @@ function initCalendarAgendaModal() {
         }
         customerMenuToggle?.setAttribute("aria-expanded", "false");
         customerRows.forEach((row) => row.classList.remove("is-active"));
+        renderVoucherDrawer();
     };
 
     const setNamedCustomer = (name) => {
@@ -3011,6 +4011,7 @@ function initCalendarAgendaModal() {
         if (isCheckoutMode) {
             setCheckoutCustomerSearch(false);
         }
+        renderVoucherDrawer();
     };
 
     const filterCustomerRows = () => {
@@ -3113,16 +4114,17 @@ function initCalendarAgendaModal() {
         isCheckoutMode = false;
         isInvoiceEditMode = false;
         isInvoicePaymentMode = false;
+        isCurrentInvoicePaid = false;
         isCheckoutCustomerSearch = false;
         isCheckoutItemPicker = false;
         activeFilter = "all";
+        agendaEntryMode = "agenda";
+        activeSalesCatalog = "services";
+        activeSalesSubfilter = "all";
         useSharedStartTime = false;
         paymentDraftAmount = 0;
         isPaymentDraftDirty = false;
-        form.classList.remove("is-review-mode", "is-checkout-mode", "is-checkout-customer-search", "is-checkout-item-picker");
-        if (agendaTitle) {
-            agendaTitle.textContent = "Agenda Baru";
-        }
+        form.classList.remove("is-review-mode", "is-checkout-mode", "is-checkout-customer-search", "is-checkout-item-picker", "is-sales-mode", "is-sales-empty-tab", "is-sales-payable-tab");
         if (checkoutLeft) {
             checkoutLeft.hidden = true;
         }
@@ -3176,6 +4178,9 @@ function initCalendarAgendaModal() {
         if (serviceSearch) {
             serviceSearch.value = "";
         }
+        if (voucherSearchInput) {
+            voucherSearchInput.value = "";
+        }
         filterButtons.forEach((button) => {
             button.classList.toggle("is-active", button.dataset.agendaFilter === "all");
         });
@@ -3184,6 +4189,7 @@ function initCalendarAgendaModal() {
         }
         setWalkInCustomer();
         filterCustomerRows();
+        syncAgendaMode();
         applyServiceFilters();
         updateSelectedServices();
         hideExitConfirm();
@@ -3217,9 +4223,10 @@ function initCalendarAgendaModal() {
 
     syncRepeatEnabled();
     syncRepeatEndType();
+    setWalkInCustomer();
+    syncAgendaMode();
     updateSelectedServices();
     applyServiceFilters();
-    setWalkInCustomer();
 }
 
 function initSalesTabs() {
@@ -4829,10 +5836,12 @@ function initInventoryPage() {
     const productPanel = shell.querySelector('[data-inventory-panel="products"]');
     const productSearch = productPanel?.querySelector(".js-inventory-search");
     const productRows = Array.from(productPanel?.querySelectorAll("[data-inventory-row]") || []);
+    const productBody = productPanel?.querySelector("tbody");
     const productTotal = productPanel?.querySelector(".js-inventory-total");
     const purchasePanel = shell.querySelector('[data-inventory-panel="purchases"]');
     const purchaseSearch = purchasePanel?.querySelector(".js-inventory-purchase-search");
     const purchaseRows = Array.from(purchasePanel?.querySelectorAll("[data-inventory-purchase-row]") || []);
+    const purchaseBody = purchasePanel?.querySelector("tbody");
     const purchaseTotal = purchasePanel?.querySelector(".js-inventory-purchase-total");
     const purchaseLocationToggle = purchasePanel?.querySelector(".js-inventory-purchase-location-toggle");
     const purchaseLocationOptions = Array.from(purchasePanel?.querySelectorAll(".js-inventory-purchase-location-option") || []);
@@ -4854,6 +5863,9 @@ function initInventoryPage() {
     const opnameDetailTotal = opnameDetailModalEl?.querySelector(".js-inventory-opname-detail-total");
     const opnameSummaryName = opnameDetailModalEl?.querySelector(".js-inventory-opname-summary-name");
     const opnameSummaryNote = opnameDetailModalEl?.querySelector(".js-inventory-opname-summary-note");
+    const opnameSummaryStart = opnameDetailModalEl?.querySelector(".js-inventory-opname-summary-start");
+    const opnameSummaryLocation = opnameDetailModalEl?.querySelector(".js-inventory-opname-summary-location");
+    const opnameSummaryStaff = opnameDetailModalEl?.querySelector(".js-inventory-opname-summary-staff");
     const opnameReviewButton = opnameDetailModalEl?.querySelector(".js-inventory-opname-review");
     const opnameEditModalEl = document.getElementById("inventoryOpnameEditModal");
     const opnameEditModal = opnameEditModalEl && typeof bootstrap !== "undefined"
@@ -4885,7 +5897,12 @@ function initInventoryPage() {
     const opnameReviewName = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-name");
     const opnameReviewNote = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-note");
     const opnameReviewStart = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-start");
+    const opnameReviewEndWrap = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-ended-wrap");
+    const opnameReviewEnd = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-end");
     const opnameReviewLocation = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-location");
+    const opnameReviewStaff = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-staff");
+    const opnameReviewReviewedWrap = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-reviewed-wrap");
+    const opnameReviewReviewedBy = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-reviewed-by");
     const opnameReviewStatus = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-status");
     const opnameReviewCancelled = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-cancelled");
     const opnameReviewCancelledBy = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-cancelled-by");
@@ -4899,8 +5916,6 @@ function initInventoryPage() {
     const opnameReviewCancelOpen = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-cancel-open");
     const opnameReviewComplete = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-complete");
     const opnameReviewExport = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-export");
-    const opnameReviewNoteBox = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-note-box");
-    const opnameReviewNoteDisplay = opnameReviewModalEl?.querySelector(".js-inventory-opname-review-note-display");
     const opnameCancelModalEl = document.getElementById("inventoryOpnameCancelModal");
     const opnameCancelModal = opnameCancelModalEl && typeof bootstrap !== "undefined"
         ? bootstrap.Modal.getOrCreateInstance(opnameCancelModalEl)
@@ -4908,6 +5923,11 @@ function initInventoryPage() {
     const opnameCancelNote = opnameCancelModalEl?.querySelector(".js-inventory-opname-cancel-note");
     const opnameCancelCounter = opnameCancelModalEl?.querySelector(".js-inventory-opname-cancel-counter");
     const opnameCancelSubmit = opnameCancelModalEl?.querySelector(".js-inventory-opname-cancel-submit");
+    const opnameCompleteModalEl = document.getElementById("inventoryOpnameCompleteModal");
+    const opnameCompleteModal = opnameCompleteModalEl && typeof bootstrap !== "undefined"
+        ? bootstrap.Modal.getOrCreateInstance(opnameCompleteModalEl)
+        : null;
+    const opnameCompleteSubmit = opnameCompleteModalEl?.querySelector(".js-inventory-opname-complete-submit");
     const masterPanel = shell.querySelector('[data-inventory-panel="master"]');
     const masterTabs = Array.from(masterPanel?.querySelectorAll("[data-inventory-master-tab]") || []);
     const masterPanels = Array.from(masterPanel?.querySelectorAll("[data-inventory-master-panel]") || []);
@@ -4922,6 +5942,7 @@ function initInventoryPage() {
     const supplierPanel = masterPanel?.querySelector('[data-inventory-master-panel="suppliers"]');
     const supplierSearch = supplierPanel?.querySelector(".js-inventory-supplier-search");
     const supplierRows = Array.from(supplierPanel?.querySelectorAll("[data-inventory-supplier-row]") || []);
+    const supplierBody = supplierPanel?.querySelector("tbody");
     const supplierTotal = supplierPanel?.querySelector(".js-inventory-supplier-total");
     const masterItemModalEl = document.getElementById("inventoryMasterItemModal");
     const masterItemModal = masterItemModalEl && typeof bootstrap !== "undefined"
@@ -5026,6 +6047,7 @@ function initInventoryPage() {
         : null;
     const orderProgressSteps = Array.from(purchaseOrderModalEl?.querySelectorAll("[data-order-progress]") || []);
     const orderPanels = Array.from(purchaseOrderModalEl?.querySelectorAll("[data-order-panel]") || []);
+    const orderSupplierGrid = purchaseOrderModalEl?.querySelector('[data-order-panel="supplier"] .inventory-order-pick-grid');
     const orderSupplierOptions = Array.from(purchaseOrderModalEl?.querySelectorAll(".js-order-supplier-option") || []);
     const orderLocationOptions = Array.from(purchaseOrderModalEl?.querySelectorAll(".js-order-location-option") || []);
     const orderSelectedSupplier = purchaseOrderModalEl?.querySelector(".js-order-selected-supplier");
@@ -5120,6 +6142,62 @@ function initInventoryPage() {
         const date = new Date(`${value}T23:59:59`);
         return Number.isNaN(date.getTime()) ? null : date;
     };
+    const parseInventoryDateTime = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw || raw === "-") {
+            return null;
+        }
+
+        const isoLike = new Date(raw);
+        if (!Number.isNaN(isoLike.getTime())) {
+            return isoLike;
+        }
+
+        const monthMap = {
+            jan: 0,
+            januari: 0,
+            feb: 1,
+            februari: 1,
+            mar: 2,
+            maret: 2,
+            apr: 3,
+            april: 3,
+            mei: 4,
+            jun: 5,
+            juni: 5,
+            jul: 6,
+            juli: 6,
+            agu: 7,
+            agustus: 7,
+            aug: 7,
+            sep: 8,
+            september: 8,
+            okt: 9,
+            oktober: 9,
+            oct: 9,
+            nov: 10,
+            november: 10,
+            des: 11,
+            desember: 11,
+            dec: 11,
+        };
+        const match = raw.match(/^(\d{1,2})\s+([A-Za-zÀ-ÿ]+)\s+(\d{4})(?:,\s*(\d{1,2})[:.](\d{2}))?$/);
+        if (!match) {
+            return null;
+        }
+
+        const day = Number.parseInt(match[1], 10) || 1;
+        const monthKey = match[2].toLowerCase();
+        const month = monthMap[monthKey];
+        const year = Number.parseInt(match[3], 10) || 1970;
+        const hour = Number.parseInt(match[4] || "0", 10) || 0;
+        const minute = Number.parseInt(match[5] || "0", 10) || 0;
+        if (month == null) {
+            return null;
+        }
+
+        return new Date(year, month, day, hour, minute, 0, 0);
+    };
     let activeOpnamePreset = "7d";
     let inventoryVariantIndex = 0;
     let opnamePicker = null;
@@ -5137,6 +6215,8 @@ function initInventoryPage() {
     let activeOpnameReviewRow = null;
     let activeOpnameReviewFilter = "counted";
     let activeOpnameReviewMode = "reviewing";
+    let suppressOpnameDetailAutosave = false;
+    let opnameDetailPersisting = false;
     let activeMasterTab = "brands";
     let purchaseOrderStep = "supplier";
     let selectedSupplierState = null;
@@ -5205,6 +6285,7 @@ function initInventoryPage() {
     }[char] || char));
 
     const getProductCatalog = () => productRows.map((row) => ({
+        id: Number(row.dataset.productId || 0),
         name: row.dataset.name || "",
         price: row.dataset.price || "Rp 0,00",
         supplier: row.dataset.supplier || "",
@@ -5221,11 +6302,128 @@ function initInventoryPage() {
         }
     };
 
+    const inventoryCsrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
+
+    const showInventoryMessage = (title, copy) => {
+        if (quickTitle) quickTitle.textContent = title;
+        if (quickCopy) quickCopy.textContent = copy;
+        quickModal?.show();
+    };
+
+    const inventoryPost = async (url, payload = {}) => {
+        const body = new URLSearchParams();
+        body.append("_csrf", inventoryCsrfToken);
+        Object.entries(payload).forEach(([key, value]) => {
+            body.append(key, value == null ? "" : String(value));
+        });
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: body.toString(),
+        });
+
+        const rawText = await response.text();
+        let data = {};
+        if (rawText) {
+            try {
+                data = JSON.parse(rawText);
+            } catch (error) {
+                data = { message: rawText };
+            }
+        }
+
+        if (!response.ok || data.success === false) {
+            throw new Error(data.message || `Request gagal (${response.status})`);
+        }
+
+        return data;
+    };
+
+    const inventoryFetch = async (url) => {
+        const response = await fetch(url, {
+            headers: {
+                "Accept": "application/json",
+            },
+            credentials: "same-origin",
+        });
+
+        const rawText = await response.text();
+        let data = {};
+        if (rawText) {
+            try {
+                data = JSON.parse(rawText);
+            } catch (error) {
+                data = { message: rawText };
+            }
+        }
+
+        if (!response.ok || data.success === false) {
+            throw new Error(data.message || `Request gagal (${response.status})`);
+        }
+
+        return data;
+    };
+
+    const handleInventoryError = (error, title = "Inventory") => {
+        console.error(error);
+        showInventoryMessage(title, error instanceof Error ? error.message : "Terjadi kesalahan saat menyimpan data inventory.");
+    };
+
     const getPurchaseStatusClass = (status) => {
         const normalized = String(status || "").trim().toLowerCase();
         if (normalized === "received") return "received";
         if (normalized === "cancelled") return "cancelled";
         return "ordered";
+    };
+
+    const syncPurchaseRowData = (row, payload) => {
+        if (!row) return;
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        const receivingLogs = Array.isArray(payload.receiving_logs || payload.receivingLogs)
+            ? (payload.receiving_logs || payload.receivingLogs)
+            : [];
+        row.dataset.purchaseId = String(payload.id || 0);
+        row.dataset.order = payload.document || payload.order || "";
+        row.dataset.status = payload.status || "Ordered";
+        row.dataset.supplier = payload.supplier || "";
+        row.dataset.location = payload.location || "";
+        row.dataset.createdAt = payload.created_at || payload.createdAt || "";
+        row.dataset.type = payload.type || "Order";
+        row.dataset.total = payload.total || formatCurrencyValue(0);
+        row.dataset.note = payload.note || "";
+        row.dataset.items = JSON.stringify(items);
+        row.dataset.receivingLogs = JSON.stringify(receivingLogs);
+        row.innerHTML = `
+            <td class="inventory-name-cell">
+                <span class="inventory-row-icon"><i class="bi bi-box-seam"></i></span>
+                <strong>${purchaseEscapeHtml(payload.document || payload.order || "")}</strong>
+            </td>
+            <td>${purchaseEscapeHtml(payload.created_at || payload.createdAt || "")}</td>
+            <td>${purchaseEscapeHtml(payload.type || "Order")}</td>
+            <td>${purchaseEscapeHtml(payload.supplier || "")}</td>
+            <td>${purchaseEscapeHtml(payload.location || "")}</td>
+            <td><span class="inventory-status inventory-status--purchase-${getPurchaseStatusClass(payload.status || "Ordered")}">${purchaseEscapeHtml(payload.status || "Ordered")}</span></td>
+            <td>${purchaseEscapeHtml(payload.total || formatCurrencyValue(0))}</td>
+        `;
+    };
+
+    const upsertPurchaseRow = (payload) => {
+        if (!purchaseBody) return null;
+        const payloadId = Number(payload.id || 0);
+        let row = payloadId > 0
+            ? purchaseRows.find((item) => Number(item.dataset.purchaseId || 0) === payloadId)
+            : null;
+        if (!row) {
+            row = document.createElement("tr");
+            row.setAttribute("data-inventory-purchase-row", "");
+            purchaseBody.prepend(row);
+            purchaseRows.unshift(row);
+        }
+        syncPurchaseRowData(row, payload);
+        return row;
     };
 
     const getNextPurchaseOrderNumber = () => {
@@ -5403,6 +6601,7 @@ function initInventoryPage() {
             existingItem.qty += 1;
         } else {
             purchaseOrderItems.push({
+                productId: product.id,
                 name: product.name,
                 qty: 1,
                 price: parseCurrencyValue(product.price),
@@ -5421,6 +6620,7 @@ function initInventoryPage() {
         const items = parseJsonData(row.dataset.items);
         const receivingLogs = parseJsonData(row.dataset.receivingLogs);
         return {
+            id: Number(row.dataset.purchaseId || 0),
             order: row.dataset.order || "",
             createdAt: row.dataset.createdAt || "",
             type: row.dataset.type || "Order",
@@ -5625,51 +6825,30 @@ function initInventoryPage() {
         purchaseDetailModal?.show();
     };
 
-    const submitPurchaseOrder = () => {
-        if (!purchasePanel || !selectedSupplierState || !selectedLocationState || purchaseOrderItems.length === 0) return;
-        const tbody = purchasePanel.querySelector("tbody");
-        if (!tbody) return;
+    const submitPurchaseOrder = async () => {
+        if (!selectedSupplierState || !selectedLocationState || purchaseOrderItems.length === 0) return;
 
-        const totalValue = purchaseOrderItems.reduce((sum, item) => sum + (item.qty * item.price), 0);
-        const createdAt = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
-        const orderNumber = getNextPurchaseOrderNumber();
-        const row = document.createElement("tr");
-        const normalizedItems = purchaseOrderItems.map((item) => ({
-            name: item.name,
-            qty: item.qty,
-            price: item.price,
-            total: item.qty * item.price,
-        }));
+        try {
+            const response = await inventoryPost("/api/inventory/purchases/create", {
+                supplier_id: selectedSupplierState.id || 0,
+                location_id: selectedLocationState.id || 0,
+                type: "Order",
+                note: orderNote?.value || "",
+                items_json: JSON.stringify(purchaseOrderItems.map((item) => ({
+                    product_id: item.productId || 0,
+                    name: item.name,
+                    qty: item.qty,
+                    price: item.price,
+                }))),
+            });
 
-        row.setAttribute("data-inventory-purchase-row", "");
-        row.dataset.order = orderNumber;
-        row.dataset.status = "Ordered";
-        row.dataset.supplier = selectedSupplierState.name;
-        row.dataset.location = selectedLocationState.name;
-        row.dataset.createdAt = createdAt;
-        row.dataset.type = "Order";
-        row.dataset.total = formatCurrencyValue(totalValue);
-        row.dataset.note = orderNote?.value || "";
-        row.dataset.items = JSON.stringify(normalizedItems);
-        row.dataset.receivingLogs = JSON.stringify([]);
-        row.innerHTML = `
-            <td class="inventory-name-cell">
-                <span class="inventory-row-icon"><i class="bi bi-box-seam"></i></span>
-                <strong>${purchaseEscapeHtml(orderNumber)}</strong>
-            </td>
-            <td>${purchaseEscapeHtml(createdAt)}</td>
-            <td>Order</td>
-            <td>${purchaseEscapeHtml(selectedSupplierState.name)}</td>
-            <td>${purchaseEscapeHtml(selectedLocationState.name)}</td>
-            <td><span class="inventory-status inventory-status--purchase-ordered">Ordered</span></td>
-            <td>${formatCurrencyValue(totalValue)}</td>
-        `;
-
-        tbody.prepend(row);
-        purchaseRows.unshift(row);
-        pendingPurchaseDetailRow = row;
-        applyPurchaseFilters();
-        purchaseOrderModal?.hide();
+            const row = upsertPurchaseRow(response.row || {});
+            pendingPurchaseDetailRow = row;
+            applyPurchaseFilters();
+            purchaseOrderModal?.hide();
+        } catch (error) {
+            handleInventoryError(error, "Pesanan");
+        }
     };
 
     const applyMasterTab = (tabName) => {
@@ -5689,6 +6868,51 @@ function initInventoryPage() {
     const updateSimpleMasterTotal = (rows, node) => {
         if (node) {
             node.textContent = `Total ${rows.filter((row) => !row.hidden).length}`;
+        }
+    };
+
+    const refreshInventoryLookupOptions = () => {
+        const syncSelect = (field, placeholderLabel, rows) => {
+            if (!field) return;
+            const currentValue = field.value;
+            const options = rows
+                .map((row) => String(row.dataset.name || "").trim())
+                .filter(Boolean)
+                .sort((left, right) => left.localeCompare(right, "id"));
+            field.innerHTML = `<option value="">${placeholderLabel}</option>${options.map((option) => `<option value="${purchaseEscapeHtml(option)}">${purchaseEscapeHtml(option)}</option>`).join("")}`;
+            field.value = options.includes(currentValue) ? currentValue : "";
+        };
+
+        syncSelect(productBrandInput, "Pilih", brandRows);
+        syncSelect(filterBrand, "Semua merk", brandRows);
+        syncSelect(productCategoryInput, "Masukkan kata kunci", categoryRows);
+        syncSelect(filterCategory, "Semua kategori", categoryRows);
+        syncSelect(filterSupplier, "Semua supplier", supplierRows);
+        syncSelect(purchaseFilterSupplier, "Semua supplier", supplierRows);
+
+        if (orderSupplierGrid) {
+            orderSupplierGrid.innerHTML = "";
+            orderSupplierOptions.length = 0;
+            supplierRows
+                .slice()
+                .sort((left, right) => String(left.dataset.name || "").localeCompare(String(right.dataset.name || ""), "id"))
+                .forEach((row) => {
+                    const button = document.createElement("button");
+                    button.className = "inventory-order-pick-card js-order-supplier-option";
+                    button.type = "button";
+                    button.dataset.supplierId = row.dataset.id || "0";
+                    button.dataset.supplierName = row.dataset.name || "";
+                    button.dataset.supplierContact = row.dataset.contact || "";
+                    button.dataset.supplierAddress = row.dataset.address || "";
+                    button.innerHTML = `
+                        <strong>${purchaseEscapeHtml(row.dataset.name || "")}</strong>
+                        <span>${purchaseEscapeHtml(row.dataset.contact || "")}</span>
+                        <small>${purchaseEscapeHtml(row.dataset.address || "")}</small>
+                    `;
+                    bindOrderSupplierOption(button);
+                    orderSupplierGrid.appendChild(button);
+                    orderSupplierOptions.push(button);
+                });
         }
     };
 
@@ -5718,15 +6942,16 @@ function initInventoryPage() {
         masterItemModal?.show();
     };
 
-    const buildSimpleMasterRow = (type, name) => {
+    const buildSimpleMasterRow = (type, payload) => {
         const row = document.createElement("tr");
         row.setAttribute(type === "categories" ? "data-inventory-category-row" : "data-inventory-brand-row", "");
-        row.dataset.name = name;
-        row.innerHTML = `<td class="inventory-simple-cell">${purchaseEscapeHtml(name)}</td>`;
+        row.dataset.id = String(payload.id || 0);
+        row.dataset.name = payload.name || "";
+        row.innerHTML = `<td class="inventory-simple-cell">${purchaseEscapeHtml(payload.name || "")}</td>`;
         return row;
     };
 
-    const saveMasterItem = () => {
+    const saveMasterItem = async () => {
         const type = masterItemModalEl?.dataset.masterType || "brands";
         const name = String(masterItemName?.value || "").trim();
         if (!name) return;
@@ -5737,35 +6962,58 @@ function initInventoryPage() {
         const tbody = panel?.querySelector("tbody");
         if (!tbody) return;
 
-        if (activeMasterRow) {
-            activeMasterRow.dataset.name = name;
-            const cell = activeMasterRow.querySelector("td");
-            if (cell) cell.textContent = name;
-        } else {
-            const row = buildSimpleMasterRow(type, name);
-            tbody.prepend(row);
-            rows.unshift(row);
-        }
+        try {
+            const response = await inventoryPost("/api/inventory/master/save", {
+                type,
+                id: activeMasterRow?.dataset.id || "",
+                name,
+            });
+            const payload = response.row || { id: 0, name };
+            const matchedRow = activeMasterRow || rows.find((row) => Number(row.dataset.id || 0) === Number(payload.id || 0));
 
-        if (type === "categories") {
-            applyCategoryFilters();
-        } else {
-            applyBrandFilters();
+            if (matchedRow) {
+                matchedRow.dataset.id = String(payload.id || 0);
+                matchedRow.dataset.name = payload.name || "";
+                const cell = matchedRow.querySelector("td");
+                if (cell) cell.textContent = payload.name || "";
+            } else {
+                const row = buildSimpleMasterRow(type, payload);
+                tbody.prepend(row);
+                rows.unshift(row);
+            }
+
+            refreshInventoryLookupOptions();
+            if (type === "categories") {
+                applyCategoryFilters();
+            } else {
+                applyBrandFilters();
+            }
+            updateSimpleMasterTotal(rows, totalNode);
+            masterItemModal?.hide();
+        } catch (error) {
+            handleInventoryError(error, "Master Data");
         }
-        updateSimpleMasterTotal(rows, totalNode);
-        masterItemModal?.hide();
     };
 
-    const deleteMasterItem = () => {
+    const deleteMasterItem = async () => {
         const type = masterItemModalEl?.dataset.masterType || "brands";
         if (!activeMasterRow) return;
         const rows = type === "categories" ? categoryRows : brandRows;
         const totalNode = type === "categories" ? categoryTotal : brandTotal;
-        const index = rows.indexOf(activeMasterRow);
-        if (index >= 0) rows.splice(index, 1);
-        activeMasterRow.remove();
-        updateSimpleMasterTotal(rows, totalNode);
-        masterItemModal?.hide();
+        try {
+            await inventoryPost("/api/inventory/master/delete", {
+                type,
+                id: activeMasterRow.dataset.id || "",
+            });
+            const index = rows.indexOf(activeMasterRow);
+            if (index >= 0) rows.splice(index, 1);
+            activeMasterRow.remove();
+            refreshInventoryLookupOptions();
+            updateSimpleMasterTotal(rows, totalNode);
+            masterItemModal?.hide();
+        } catch (error) {
+            handleInventoryError(error, "Master Data");
+        }
     };
 
     const resetSupplierModal = () => {
@@ -5798,6 +7046,7 @@ function initInventoryPage() {
     };
 
     const syncSupplierRow = (row, data) => {
+        row.dataset.id = String(data.id || row.dataset.id || 0);
         row.dataset.name = data.name;
         row.dataset.description = data.description;
         row.dataset.contact = data.contact;
@@ -5815,7 +7064,7 @@ function initInventoryPage() {
         `;
     };
 
-    const saveSupplierItem = () => {
+    const saveSupplierItem = async () => {
         const data = {
             name: String(supplierModalName?.value || "").trim(),
             description: String(supplierModalDescription?.value || "").trim(),
@@ -5829,31 +7078,58 @@ function initInventoryPage() {
             postal: String(supplierModalPostal?.value || "").trim(),
         };
         if (!data.name) return;
-        const tbody = supplierPanel?.querySelector("tbody");
-        if (!tbody) return;
+        if (!supplierBody) return;
 
-        if (activeMasterRow) {
-            syncSupplierRow(activeMasterRow, data);
-        } else {
-            const row = document.createElement("tr");
-            row.setAttribute("data-inventory-supplier-row", "");
-            syncSupplierRow(row, data);
-            tbody.prepend(row);
-            supplierRows.unshift(row);
+        try {
+            const response = await inventoryPost("/api/inventory/suppliers/save", {
+                id: activeMasterRow?.dataset.id || "",
+                name: data.name,
+                description: data.description,
+                contact: data.contact,
+                email: data.email,
+                phone: data.phone,
+                website: data.website,
+                address: data.address,
+                city: data.city,
+                country: data.country,
+                postal: data.postal,
+            });
+            const payload = response.row || data;
+
+            if (activeMasterRow) {
+                syncSupplierRow(activeMasterRow, payload);
+            } else {
+                const row = document.createElement("tr");
+                row.setAttribute("data-inventory-supplier-row", "");
+                syncSupplierRow(row, payload);
+                supplierBody.prepend(row);
+                supplierRows.unshift(row);
+            }
+
+            refreshInventoryLookupOptions();
+            applySupplierFilters();
+            updateSimpleMasterTotal(supplierRows, supplierTotal);
+            supplierModal?.hide();
+        } catch (error) {
+            handleInventoryError(error, "Supplier");
         }
-
-        applySupplierFilters();
-        updateSimpleMasterTotal(supplierRows, supplierTotal);
-        supplierModal?.hide();
     };
 
-    const deleteSupplierItem = () => {
+    const deleteSupplierItem = async () => {
         if (!activeMasterRow) return;
-        const index = supplierRows.indexOf(activeMasterRow);
-        if (index >= 0) supplierRows.splice(index, 1);
-        activeMasterRow.remove();
-        updateSimpleMasterTotal(supplierRows, supplierTotal);
-        supplierModal?.hide();
+        try {
+            await inventoryPost("/api/inventory/suppliers/delete", {
+                id: activeMasterRow.dataset.id || "",
+            });
+            const index = supplierRows.indexOf(activeMasterRow);
+            if (index >= 0) supplierRows.splice(index, 1);
+            activeMasterRow.remove();
+            refreshInventoryLookupOptions();
+            updateSimpleMasterTotal(supplierRows, supplierTotal);
+            supplierModal?.hide();
+        } catch (error) {
+            handleInventoryError(error, "Supplier");
+        }
     };
 
     const closeDrawer = (drawer) => {
@@ -6107,6 +7383,30 @@ function initInventoryPage() {
         return row._inventoryHistory;
     };
 
+    const loadProductHistory = async (row, product) => {
+        if (!row) return;
+        const productId = Number(row.dataset.productId || 0);
+        if (productId <= 0) {
+            historyRowsState = ensureRowHistory(row, product);
+            syncHistorySummary(product);
+            renderHistoryRows();
+            return;
+        }
+
+        try {
+            const response = await inventoryFetch(`/api/inventory/products/history?id=${productId}`);
+            row._inventoryHistory = Array.isArray(response.rows) ? response.rows : [];
+            row.dataset.historyLoaded = "true";
+            if (activeProductRow === row && pendingProductDetail) {
+                historyRowsState = ensureRowHistory(row, pendingProductDetail);
+                syncHistorySummary(pendingProductDetail);
+                renderHistoryRows();
+            }
+        } catch (error) {
+            handleInventoryError(error, "Riwayat Stok");
+        }
+    };
+
     const appendHistoryEntry = ({ mode, qty, cost, reason, note }) => {
         if (!pendingProductDetail || !activeProductRow) return;
         const direction = mode === "decrease" ? "decrease" : "increase";
@@ -6148,8 +7448,8 @@ function initInventoryPage() {
         updateProductSaveState();
     };
 
-    const saveProductChanges = () => {
-        if (!pendingProductDetail || !activeProductRow) return;
+    const saveProductChanges = async () => {
+        if (!pendingProductDetail && !activeProductRow && productModalMode !== "create") return;
 
         const selectedLocations = getSelectedLocationLabels();
         const nameValue = String(productNameInput?.value || "").trim();
@@ -6157,35 +7457,90 @@ function initInventoryPage() {
         const brandValue = String(productBrandInput?.value || "").trim();
         const descriptionValue = String(productDescriptionInput?.value || "").trim();
         const variantCard = variantList?.querySelector(".js-inventory-variant-card");
-        const priceInputValue = variantCard?.querySelectorAll("input")[1]?.value || pendingProductDetail.price || "Rp 0,00";
+        const priceInputValue = variantCard?.querySelectorAll("input")[1]?.value || pendingProductDetail?.price || "Rp 0,00";
+        const defaultDetail = pendingProductDetail || {
+            name: "",
+            brand: "",
+            category: "",
+            supplier: "",
+            type: "consumable",
+            typeLabel: "Konsumsi",
+            unitAll: "pcs",
+            usedIn: [],
+            usedInCount: 0,
+            price: "Rp 0",
+            qty: 0,
+            status: "Aktif",
+            code: "",
+        };
 
-        pendingProductDetail.name = nameValue || pendingProductDetail.name;
-        pendingProductDetail.category = categoryValue || pendingProductDetail.category;
-        pendingProductDetail.brand = brandValue || pendingProductDetail.brand;
-        pendingProductDetail.price = priceInputValue || pendingProductDetail.price;
-        pendingProductDetail.status = productSalesToggle?.checked ? "Aktif" : "Nonaktif";
-        pendingProductDetail.locations = selectedLocations;
+        try {
+            const response = await inventoryPost("/api/inventory/products/save", {
+                id: activeProductRow?.dataset.productId || 0,
+                name: nameValue,
+                category: categoryValue,
+                brand: brandValue,
+                price: parseCurrencyValue(priceInputValue || 0),
+                status: productSalesToggle?.checked ? "Aktif" : "Nonaktif",
+            });
+            const product = response.product || {};
+            const normalizedProduct = {
+                ...defaultDetail,
+                ...product,
+                name: product.name || nameValue || defaultDetail.name,
+                category: product.category || categoryValue || defaultDetail.category,
+                brand: product.brand || brandValue || defaultDetail.brand,
+                price: product.price || formatCurrencyValue(parseCurrencyValue(priceInputValue || 0)),
+                qty: Number(product.qty ?? defaultDetail.qty ?? 0),
+                status: product.status || (productSalesToggle?.checked ? "Aktif" : "Nonaktif"),
+                usedIn: selectedLocations,
+                usedInCount: selectedLocations.length,
+                description: descriptionValue,
+            };
 
-        activeProductRow.dataset.name = pendingProductDetail.name;
-        activeProductRow.dataset.category = pendingProductDetail.category;
-        activeProductRow.dataset.brand = pendingProductDetail.brand;
-        activeProductRow.dataset.price = pendingProductDetail.price;
-        activeProductRow.dataset.qty = String(pendingProductDetail.qty || 0);
-        activeProductRow.dataset.status = pendingProductDetail.status;
-        activeProductRow.dataset.usedIn = selectedLocations.join("|");
-        activeProductRow.dataset.usedInCount = String(selectedLocations.length);
-        activeProductRow.dataset.description = descriptionValue;
+            pendingProductDetail = normalizedProduct;
+            if (!activeProductRow) {
+                if (!productBody) return;
+                activeProductRow = document.createElement("tr");
+                activeProductRow.setAttribute("data-inventory-row", "");
+                productBody.prepend(activeProductRow);
+                productRows.unshift(activeProductRow);
+            }
 
-        const nameButton = activeProductRow.querySelector(".js-inventory-product-open");
-        const priceCell = activeProductRow.children[2];
-        const qtyCell = activeProductRow.children[3];
+            activeProductRow.dataset.productId = String(product.id || activeProductRow.dataset.productId || 0);
+            activeProductRow.dataset.name = normalizedProduct.name;
+            activeProductRow.dataset.code = product.code || product.sku || normalizedProduct.code || "-";
+            activeProductRow.dataset.brand = normalizedProduct.brand;
+            activeProductRow.dataset.category = normalizedProduct.category;
+            activeProductRow.dataset.supplier = product.supplier || normalizedProduct.supplier || "-";
+            activeProductRow.dataset.type = product.type || normalizedProduct.type || "";
+            activeProductRow.dataset.typeLabel = product.type_label || normalizedProduct.typeLabel || "";
+            activeProductRow.dataset.unitRetail = product.unit_retail || normalizedProduct.unitRetail || "";
+            activeProductRow.dataset.unitConsumption = product.unit_consumption || normalizedProduct.unitConsumption || "";
+            activeProductRow.dataset.unitAll = product.unit_all || normalizedProduct.unitAll || "";
+            activeProductRow.dataset.usedIn = selectedLocations.join("|");
+            activeProductRow.dataset.usedInCount = String(selectedLocations.length);
+            activeProductRow.dataset.price = normalizedProduct.price;
+            activeProductRow.dataset.qty = String(normalizedProduct.qty);
+            activeProductRow.dataset.status = normalizedProduct.status;
+            activeProductRow.dataset.stockState = normalizedProduct.qty > 0 ? "available" : "empty";
+            activeProductRow.dataset.description = descriptionValue;
+            activeProductRow.innerHTML = `
+                <td class="inventory-name-cell">
+                    <span class="inventory-row-icon"><i class="bi bi-bag"></i></span>
+                    <button class="inventory-name-button js-inventory-product-open" type="button">${purchaseEscapeHtml(normalizedProduct.name)}</button>
+                </td>
+                <td>${purchaseEscapeHtml(activeProductRow.dataset.code)}</td>
+                <td>${purchaseEscapeHtml(normalizedProduct.price)}</td>
+                <td>${purchaseEscapeHtml(String(normalizedProduct.qty))}</td>
+            `;
 
-        if (nameButton) nameButton.textContent = pendingProductDetail.name;
-        if (priceCell) priceCell.textContent = pendingProductDetail.price;
-        if (qtyCell) qtyCell.textContent = String(pendingProductDetail.qty || 0);
-
-        activeProductRow._inventoryHistory = historyRowsState;
-        productModal?.hide();
+            activeProductRow._inventoryHistory = historyRowsState;
+            applyProductFilters();
+            productModal?.hide();
+        } catch (error) {
+            handleInventoryError(error, "Produk");
+        }
     };
 
     const updateProductSaveState = () => {
@@ -6479,8 +7834,11 @@ function initInventoryPage() {
         opnameRows.forEach((row) => {
             const matchesQuery = !query || String(row.textContent || "").toLowerCase().includes(query);
             const matchesStatus = !status || row.dataset.status === status;
-            const rowStart = startOfDay(row.dataset.start || "");
-            const rowEnd = endOfDay(row.dataset.end || "");
+            const rowStartParsed = parseInventoryDateTime(row.dataset.start || "");
+            const rowEndParsed = parseInventoryDateTime(row.dataset.end || "");
+            const rowStart = rowStartParsed ? new Date(rowStartParsed.getFullYear(), rowStartParsed.getMonth(), rowStartParsed.getDate(), 0, 0, 0, 0) : null;
+            const rowEndSource = rowEndParsed || rowStartParsed;
+            const rowEnd = rowEndSource ? new Date(rowEndSource.getFullYear(), rowEndSource.getMonth(), rowEndSource.getDate(), 23, 59, 59, 999) : null;
             const matchesDate = (!start || (rowEnd && rowEnd >= start)) && (!end || (rowStart && rowStart <= end));
             const show = matchesQuery && matchesStatus && matchesDate;
             row.hidden = !show;
@@ -6577,6 +7935,16 @@ function initInventoryPage() {
         hour12: false,
     }).format(new Date()).replace(/\./g, ":");
 
+    const getNextOpnameDraftName = () => {
+        const maxNumber = opnameRows.reduce((highest, row) => {
+            const match = String(row.dataset.name || "").match(/#(\d+)/);
+            const value = match ? Number.parseInt(match[1], 10) || 0 : 0;
+            return Math.max(highest, value);
+        }, 0);
+
+        return `Stock Opname #${maxNumber + 1}`;
+    };
+
     const getOpnameStatusTone = (status) => {
         const normalized = String(status || "").toLowerCase();
         if (normalized.includes("review") || normalized.includes("meninjau")) {
@@ -6597,12 +7965,28 @@ function initInventoryPage() {
         return "attention";
     };
 
+    const normalizeOpnameUiStatus = (status) => {
+        const normalized = String(status || "").trim().toLowerCase();
+        if (normalized.includes("complete") || normalized.includes("komplit")) {
+            return "Completed";
+        }
+        if (normalized.includes("cancel") || normalized.includes("dibatal")) {
+            return "Cancelled";
+        }
+        if (normalized.includes("count") || normalized.includes("perhitungan") || normalized.includes("pending")) {
+            return "Perhitungan";
+        }
+
+        return "Meninjau";
+    };
+
     const getOpnameDetailSnapshot = () => {
         return opnameDetailRows.map((row) => {
             const countedInput = row.querySelector(".js-inventory-opname-counted");
             const counted = Math.max(0, Number.parseInt(String(countedInput?.value || "").replace(/[^\d]/g, ""), 10) || 0);
             const expected = Number.parseInt(row.dataset.opnameExpected || "0", 10) || 0;
             return {
+                product_id: Number(row.dataset.productId || 0),
                 name: row.dataset.opnameName || "",
                 code: row.dataset.opnameCode || "-",
                 sku: row.dataset.opnameSku || "-",
@@ -6614,24 +7998,130 @@ function initInventoryPage() {
         });
     };
 
+    const fillOpnameDetailRows = (items = []) => {
+        const itemMap = new Map();
+        items.forEach((item) => {
+            const productId = Number(item.product_id || 0);
+            const sku = String(item.sku || "");
+            const name = String(item.name || "");
+            if (productId > 0) {
+                itemMap.set(`id:${productId}`, item);
+            }
+            if (sku) {
+                itemMap.set(`sku:${sku}`, item);
+            }
+            if (name) {
+                itemMap.set(`name:${name}`, item);
+            }
+        });
+
+        opnameDetailRows.forEach((row) => {
+            const match = itemMap.get(`id:${Number(row.dataset.productId || 0)}`)
+                || itemMap.get(`sku:${String(row.dataset.opnameSku || "")}`)
+                || itemMap.get(`name:${String(row.dataset.opnameName || "")}`);
+            const input = row.querySelector(".js-inventory-opname-counted");
+            if (input instanceof HTMLInputElement) {
+                if (match) {
+                    input.value = String(Math.max(0, Number.parseInt(String(match.counted ?? 0), 10) || 0));
+                } else {
+                    input.value = "";
+                }
+            }
+            syncOpnameDetailRow(row);
+        });
+        applyOpnameDetailFilters();
+    };
+
+    const openOpnameDetailModal = (row = null) => {
+        activeOpnameReviewRow = row;
+        const fallbackName = row?.dataset.name || getNextOpnameDraftName();
+        const fallbackNote = row?.dataset.note || "Tidak ada catatan";
+        const fallbackStart = row?.dataset.start || getInventoryNowLabel();
+        const fallbackLocation = row?.dataset.location || "Star Salon";
+        const fallbackStaff = row?.dataset.startedBy || "Rayhan Doni Pramana";
+        if (opnameSummaryName) {
+            opnameSummaryName.textContent = fallbackName;
+        }
+        if (opnameSummaryNote) {
+            opnameSummaryNote.textContent = fallbackNote;
+        }
+        if (opnameSummaryStart) {
+            opnameSummaryStart.textContent = fallbackStart;
+        }
+        if (opnameSummaryLocation) {
+            opnameSummaryLocation.textContent = fallbackLocation;
+        }
+        if (opnameSummaryStaff) {
+            opnameSummaryStaff.textContent = fallbackStaff;
+        }
+        if (opnameDetailSearch) {
+            opnameDetailSearch.value = "";
+        }
+        fillOpnameDetailRows(parseJsonData(row?.dataset.reviewItems));
+        suppressOpnameDetailAutosave = false;
+        opnameDetailModal?.show();
+    };
+
+    const returnToOpnameTable = (row) => {
+        applyOpnameFilters();
+        applyTab("opname");
+        row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+
+    const persistOpnameDetail = async (status = "Perhitungan") => {
+        const locationButton = orderLocationOptions.find((button) => (button.dataset.locationName || "") === "Star Salon") || orderLocationOptions[0];
+        const response = await inventoryPost("/api/inventory/opnames/save", {
+            id: activeOpnameReviewRow?.dataset.opnameId || 0,
+            name: opnameSummaryName?.textContent?.trim() || "Stock Opname",
+            note: opnameSummaryNote?.textContent?.trim() === "Tidak ada catatan" ? "" : (opnameSummaryNote?.textContent?.trim() || ""),
+            status,
+            location_id: locationButton?.dataset.locationId || 1,
+            items_json: JSON.stringify(getOpnameDetailSnapshot()),
+        });
+        const payload = response.row || {};
+
+        return upsertOpnameMainRow({
+            id: payload.id,
+            name: payload.name || opnameSummaryName?.textContent?.trim() || "Stock Opname",
+            note: payload.note || "",
+            location: payload.location || opnameSummaryLocation?.textContent?.trim() || "Star Salon",
+            start: payload.started_at || opnameSummaryStart?.textContent?.trim() || "01 Mei 2026, 13:16",
+            end: payload.ended_at || "-",
+            status: payload.status || status,
+            items: payload.items || getOpnameDetailSnapshot(),
+            cancelNote: payload.cancelled_note || "",
+            cancelledBy: payload.cancelled_by || "",
+            startedBy: payload.started_by || opnameSummaryStaff?.textContent?.trim() || "Rayhan Doni Pramana",
+            sourceRow: activeOpnameReviewRow,
+        });
+    };
+
     const upsertOpnameMainRow = (payload) => {
         if (!opnameBody) return null;
         const safeName = String(payload.name || "Stock Opname #5");
         const safeLocation = String(payload.location || "Star Salon");
-        const safeStatus = String(payload.status || "Meninjau");
+        const safeStatus = normalizeOpnameUiStatus(payload.status || "Meninjau");
         const safeStart = String(payload.start || "01 Mei 2026, 13:16");
         const safeEnd = String(payload.end || "-");
         const safeNote = String(payload.note || "");
         const safeCancelNote = String(payload.cancelNote || "");
         const safeCancelledBy = String(payload.cancelledBy || "");
+        const safeStartedBy = String(payload.startedBy || "Rayhan Doni Pramana");
         const tone = getOpnameStatusTone(safeStatus);
-        let row = opnameRows.find((item) => item.dataset.name === safeName);
+        const payloadId = Number(payload.id || 0);
+        let row = payload.sourceRow instanceof HTMLElement ? payload.sourceRow : null;
+        if (!row) {
+            row = payloadId > 0
+                ? opnameRows.find((item) => Number(item.dataset.opnameId || 0) === payloadId)
+                : opnameRows.find((item) => item.dataset.name === safeName);
+        }
         if (!row) {
             row = document.createElement("tr");
             row.setAttribute("data-inventory-opname-row", "");
             opnameBody.prepend(row);
             opnameRows.unshift(row);
         }
+        row.dataset.opnameId = String(payloadId || row.dataset.opnameId || 0);
         row.dataset.name = safeName;
         row.dataset.location = safeLocation;
         row.dataset.status = safeStatus;
@@ -6640,6 +8130,7 @@ function initInventoryPage() {
         row.dataset.note = safeNote;
         row.dataset.cancelNote = safeCancelNote;
         row.dataset.cancelledBy = safeCancelledBy;
+        row.dataset.startedBy = safeStartedBy;
         row.dataset.reviewItems = JSON.stringify(payload.items || []);
         row.innerHTML = `
             <td class="inventory-name-cell">
@@ -6756,11 +8247,11 @@ function initInventoryPage() {
         }
         if (opnameReviewStatus) {
             opnameReviewStatus.textContent = isReviewing
-                ? "Reviewing"
+                ? "Meninjau"
                 : isCancelled
                     ? "Cancelled"
                     : isCompleted
-                        ? "Komplit"
+                        ? "Completed"
                         : "Perhitungan";
             opnameReviewStatus.className = `inventory-opname-review__status ${isReviewing ? "is-reviewing" : isCancelled ? "is-cancelled" : isCompleted ? "is-complete" : "is-counting"}`;
         }
@@ -6776,6 +8267,18 @@ function initInventoryPage() {
         if (opnameReviewCancelledBy && row) {
             opnameReviewCancelledBy.textContent = row.dataset.cancelledBy || "Rayhan Doni Pramana";
         }
+        if (opnameReviewEndWrap) {
+            opnameReviewEndWrap.hidden = !(isCompleted || isCancelled);
+        }
+        if (opnameReviewEnd) {
+            opnameReviewEnd.textContent = row?.dataset.end && row.dataset.end !== "-" ? row.dataset.end : "-";
+        }
+        if (opnameReviewReviewedWrap) {
+            opnameReviewReviewedWrap.hidden = !isCompleted;
+        }
+        if (opnameReviewReviewedBy) {
+            opnameReviewReviewedBy.textContent = row?.dataset.cancelledBy || row?.dataset.startedBy || "Rayhan Doni Pramana";
+        }
         if (opnameReviewMore?.parentElement) {
             opnameReviewMore.parentElement.hidden = !isReviewing;
         }
@@ -6783,8 +8286,9 @@ function initInventoryPage() {
             opnameReviewComplete.hidden = !isReviewing;
         }
         if (opnameReviewExport) {
-            opnameReviewExport.hidden = !isCancelled;
+            opnameReviewExport.hidden = !(isCancelled || isCompleted);
         }
+        opnameReviewMoreMenu?.setAttribute("hidden", "hidden");
     };
 
     const openOpnameReviewModal = (row) => {
@@ -6793,24 +8297,16 @@ function initInventoryPage() {
         const normalizedStatus = String(row.dataset.status || "").toLowerCase();
         const mode = normalizedStatus.includes("meninjau")
             ? "reviewing"
-            : normalizedStatus.includes("komplit")
+            : normalizedStatus.includes("komplit") || normalizedStatus.includes("complete")
                 ? "completed"
-                : normalizedStatus.includes("dibatal")
+                : normalizedStatus.includes("dibatal") || normalizedStatus.includes("cancel")
                     ? "cancelled"
                     : "counting";
         if (opnameReviewName) opnameReviewName.textContent = row.dataset.name || "Stock Opname";
         if (opnameReviewNote) opnameReviewNote.textContent = row.dataset.note || "Tidak ada catatan";
         if (opnameReviewStart) opnameReviewStart.textContent = row.dataset.start || "-";
         if (opnameReviewLocation) opnameReviewLocation.textContent = row.dataset.location || "Star Salon";
-        if (opnameReviewNoteBox) {
-            const noteValue = mode === "cancelled"
-                ? String(row.dataset.cancelNote || "").trim()
-                : "";
-            opnameReviewNoteBox.hidden = !noteValue;
-            if (opnameReviewNoteDisplay) {
-                opnameReviewNoteDisplay.textContent = noteValue;
-            }
-        }
+        if (opnameReviewStaff) opnameReviewStaff.textContent = row.dataset.startedBy || "Rayhan Doni Pramana";
         setOpnameReviewMode(mode, row);
         activeOpnameReviewFilter = "counted";
         if (opnameReviewSearch) opnameReviewSearch.value = "";
@@ -6949,29 +8445,59 @@ function initInventoryPage() {
         resetOpnameImportState();
     });
     opnameImportModalEl?.addEventListener("hidden.bs.modal", resetOpnameImportState);
-    opnameReviewButton?.addEventListener("click", () => {
-        const payload = {
-            name: opnameSummaryName?.textContent?.trim() || "Stock Opname #5",
-            note: opnameSummaryNote?.textContent?.trim() === "Tidak ada catatan" ? "" : (opnameSummaryNote?.textContent?.trim() || ""),
-            location: "Star Salon",
-            start: "01 Mei 2026, 13:16",
-            end: "-",
-            status: "Meninjau",
-            items: getOpnameDetailSnapshot(),
-            cancelNote: "",
-            cancelledBy: "",
-        };
-        upsertOpnameMainRow(payload);
-        applyOpnameFilters();
-        opnameDetailModal?.hide();
-        applyTab("opname");
-        const targetRow = opnameRows.find((item) => item.dataset.name === payload.name);
-        targetRow?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const submitOpnameForReview = async () => {
+        try {
+            const targetRow = await persistOpnameDetail("Meninjau");
+            suppressOpnameDetailAutosave = true;
+            opnameDetailModal?.hide();
+            returnToOpnameTable(targetRow);
+        } catch (error) {
+            handleInventoryError(error, "Stok Opname");
+        }
+    };
+    opnameReviewButton?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void submitOpnameForReview();
+    });
+    opnameDetailModalEl?.addEventListener("click", (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest(".js-inventory-opname-review")
+            : null;
+        if (!target || target === opnameReviewButton) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        void submitOpnameForReview();
+    });
+    opnameDetailModalEl?.addEventListener("hide.bs.modal", async (event) => {
+        if (suppressOpnameDetailAutosave || opnameDetailPersisting) {
+            suppressOpnameDetailAutosave = false;
+            return;
+        }
+        event.preventDefault();
+        opnameDetailPersisting = true;
+        try {
+            const targetRow = await persistOpnameDetail("Perhitungan");
+            returnToOpnameTable(targetRow);
+            suppressOpnameDetailAutosave = true;
+            opnameDetailModal?.hide();
+        } catch (error) {
+            handleInventoryError(error, "Simpan Perhitungan Stok");
+        } finally {
+            opnameDetailPersisting = false;
+        }
     });
     opnameBody?.addEventListener("click", (event) => {
         const row = event.target instanceof HTMLElement ? event.target.closest("[data-inventory-opname-row]") : null;
         if (!row) return;
-        openOpnameReviewModal(row);
+        const normalizedStatus = String(row.dataset.status || "").toLowerCase();
+        if (normalizedStatus.includes("meninjau") || normalizedStatus.includes("komplit") || normalizedStatus.includes("complete") || normalizedStatus.includes("dibatal") || normalizedStatus.includes("cancel")) {
+            openOpnameReviewModal(row);
+            return;
+        }
+        openOpnameDetailModal(row);
     });
     opnameReviewSearch?.addEventListener("input", renderOpnameReviewTable);
     opnameReviewFilters.forEach((button) => {
@@ -6988,13 +8514,40 @@ function initInventoryPage() {
             opnameReviewMoreMenu?.setAttribute("hidden", "hidden");
         }
     });
-    opnameReviewRecount?.addEventListener("click", () => {
-        if (!activeOpnameReviewRow) return;
-        setOpnameMainRowStatus(activeOpnameReviewRow, "Perhitungan", { end: "-", cancelNote: "", cancelledBy: "" });
+    opnameReviewMoreMenu?.addEventListener("click", (event) => {
+        event.stopPropagation();
+    });
+    document.addEventListener("click", () => {
         opnameReviewMoreMenu?.setAttribute("hidden", "hidden");
-        opnameReviewModal?.hide();
-        applyOpnameFilters();
-        activeOpnameReviewRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    opnameReviewRecount?.addEventListener("click", async () => {
+        if (!activeOpnameReviewRow) return;
+        try {
+            const response = await inventoryPost("/api/inventory/opnames/recount", {
+                id: activeOpnameReviewRow.dataset.opnameId || 0,
+            });
+            const payload = response.row || {};
+            const targetRow = upsertOpnameMainRow({
+                id: payload.id,
+                name: payload.name,
+                note: payload.note || "",
+                location: payload.location || activeOpnameReviewRow.dataset.location || "Star Salon",
+                start: payload.started_at || activeOpnameReviewRow.dataset.start || "-",
+                end: payload.ended_at || "-",
+                status: payload.status || "Perhitungan",
+                items: payload.items || parseJsonData(activeOpnameReviewRow.dataset.reviewItems),
+                cancelNote: "",
+                cancelledBy: "",
+                startedBy: payload.started_by || activeOpnameReviewRow.dataset.startedBy || "Rayhan Doni Pramana",
+                sourceRow: activeOpnameReviewRow,
+            });
+            opnameReviewMoreMenu?.setAttribute("hidden", "hidden");
+            opnameReviewModal?.hide();
+            applyOpnameFilters();
+            targetRow?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } catch (error) {
+            handleInventoryError(error, "Stok Opname");
+        }
     });
     opnameReviewCancelOpen?.addEventListener("click", () => {
         opnameReviewMoreMenu?.setAttribute("hidden", "hidden");
@@ -7008,10 +8561,37 @@ function initInventoryPage() {
     });
     opnameReviewComplete?.addEventListener("click", () => {
         if (!activeOpnameReviewRow) return;
-        setOpnameMainRowStatus(activeOpnameReviewRow, "Komplit", { end: getInventoryNowLabel(), cancelNote: "", cancelledBy: "" });
-        opnameReviewModal?.hide();
-        applyOpnameFilters();
-        activeOpnameReviewRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        opnameReviewMoreMenu?.setAttribute("hidden", "hidden");
+        opnameCompleteModal?.show();
+    });
+    opnameCompleteSubmit?.addEventListener("click", async () => {
+        if (!activeOpnameReviewRow) return;
+        try {
+            const response = await inventoryPost("/api/inventory/opnames/complete", {
+                id: activeOpnameReviewRow.dataset.opnameId || 0,
+            });
+            const payload = response.row || {};
+            const targetRow = upsertOpnameMainRow({
+                id: payload.id,
+                name: payload.name,
+                note: payload.note || "",
+                location: payload.location || activeOpnameReviewRow.dataset.location || "Star Salon",
+                start: payload.started_at || activeOpnameReviewRow.dataset.start || "-",
+                end: payload.ended_at || getInventoryNowLabel(),
+                status: payload.status || "Completed",
+                items: payload.items || parseJsonData(activeOpnameReviewRow.dataset.reviewItems),
+                cancelNote: "",
+                cancelledBy: "",
+                startedBy: payload.started_by || activeOpnameReviewRow.dataset.startedBy || "Rayhan Doni Pramana",
+                sourceRow: activeOpnameReviewRow,
+            });
+            opnameCompleteModal?.hide();
+            applyOpnameFilters();
+            targetRow?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            openOpnameReviewModal(targetRow);
+        } catch (error) {
+            handleInventoryError(error, "Stok Opname");
+        }
     });
     opnameReviewExport?.addEventListener("click", () => {
         if (!activeOpnameReviewRow) return;
@@ -7043,18 +8623,35 @@ function initInventoryPage() {
             opnameCancelCounter.textContent = `${String(opnameCancelNote.value || "").length}/200`;
         }
     });
-    opnameCancelSubmit?.addEventListener("click", () => {
+    opnameCancelSubmit?.addEventListener("click", async () => {
         if (!activeOpnameReviewRow) return;
-        const cancelNote = String(opnameCancelNote?.value || "").trim();
-        setOpnameMainRowStatus(activeOpnameReviewRow, "Dibatalkan", {
-            end: getInventoryNowLabel(),
-            cancelNote,
-            cancelledBy: "Rayhan Doni Pramana",
-        });
-        opnameCancelModal?.hide();
-        opnameReviewModal?.hide();
-        applyOpnameFilters();
-        activeOpnameReviewRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        try {
+            const response = await inventoryPost("/api/inventory/opnames/cancel", {
+                id: activeOpnameReviewRow.dataset.opnameId || 0,
+                note: String(opnameCancelNote?.value || "").trim(),
+            });
+            const payload = response.row || {};
+            const targetRow = upsertOpnameMainRow({
+                id: payload.id,
+                name: payload.name,
+                note: payload.note || "",
+                location: payload.location || activeOpnameReviewRow.dataset.location || "Star Salon",
+                start: payload.started_at || activeOpnameReviewRow.dataset.start || "-",
+                end: payload.ended_at || getInventoryNowLabel(),
+                status: payload.status || "Cancelled",
+                items: payload.items || parseJsonData(activeOpnameReviewRow.dataset.reviewItems),
+                cancelNote: payload.cancelled_note || String(opnameCancelNote?.value || "").trim(),
+                cancelledBy: payload.cancelled_by || "Staff",
+                startedBy: payload.started_by || activeOpnameReviewRow.dataset.startedBy || "Rayhan Doni Pramana",
+                sourceRow: activeOpnameReviewRow,
+            });
+            opnameCancelModal?.hide();
+            opnameReviewModal?.hide();
+            applyOpnameFilters();
+            targetRow?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        } catch (error) {
+            handleInventoryError(error, "Batalkan Stok Opname");
+        }
     });
     brandSearch?.addEventListener("input", applyBrandFilters);
     categorySearch?.addEventListener("input", applyCategoryFilters);
@@ -7313,7 +8910,7 @@ function initInventoryPage() {
 
         if (activeInventoryTab === "opname") {
             closeInventoryFabMenu();
-            opnameDetailModal?.show();
+            openOpnameDetailModal(null);
         }
     });
 
@@ -7335,10 +8932,13 @@ function initInventoryPage() {
         });
     });
 
-    orderSupplierOptions.forEach((button) => {
+    const bindOrderSupplierOption = (button) => {
+        if (!button || button.dataset.boundClick === "true") return;
+        button.dataset.boundClick = "true";
         button.addEventListener("click", () => {
             orderSupplierOptions.forEach((item) => item.classList.toggle("is-active", item === button));
             selectedSupplierState = {
+                id: Number(button.dataset.supplierId || 0),
                 name: button.dataset.supplierName || "",
                 contact: button.dataset.supplierContact || "",
                 address: button.dataset.supplierAddress || "",
@@ -7346,19 +8946,25 @@ function initInventoryPage() {
             renderPurchaseOrderSummary();
             setPurchaseOrderStep("location");
         });
-    });
+    };
 
-    orderLocationOptions.forEach((button) => {
+    const bindOrderLocationOption = (button) => {
+        if (!button || button.dataset.boundClick === "true") return;
+        button.dataset.boundClick = "true";
         button.addEventListener("click", () => {
             orderLocationOptions.forEach((item) => item.classList.toggle("is-active", item === button));
             selectedLocationState = {
+                id: Number(button.dataset.locationId || 0),
                 name: button.dataset.locationName || "",
                 address: button.dataset.locationAddress || "",
             };
             renderPurchaseOrderSummary();
             setPurchaseOrderStep("order");
         });
-    });
+    };
+
+    orderSupplierOptions.forEach(bindOrderSupplierOption);
+    orderLocationOptions.forEach(bindOrderLocationOption);
 
     orderNoteToggle?.addEventListener("click", () => {
         purchaseOrderNoteVisible = !purchaseOrderNoteVisible;
@@ -7546,41 +9152,51 @@ function initInventoryPage() {
         renderPurchaseDetail(activePurchaseDetailRow, { mode: "view" });
     });
 
-    orderDetailReceiveConfirm?.addEventListener("click", () => {
+    orderDetailReceiveConfirm?.addEventListener("click", async () => {
         if (!activePurchaseDetailRow) return;
-        const draft = ensurePurchaseReceiveDraft(activePurchaseDetailRow);
-        const now = new Date();
-        const stamp = `${now.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })} ${now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}`;
-        activePurchaseDetailRow.dataset.receivingLogs = JSON.stringify(draft.map((item) => ({
-            product: item.name,
-            qty: item.receivedQty || 0,
-            date: stamp,
-            price: item.price || 0,
-            total: (item.receivedQty || 0) * (item.price || 0),
-        })));
-        activePurchaseDetailRow.dataset.items = JSON.stringify(draft.map((item) => ({
-            name: item.name,
-            qty: item.qty || 0,
-            price: item.price || 0,
-            total: (item.qty || 0) * (item.price || 0),
-            receivedQty: item.receivedQty || 0,
-        })));
-        activePurchaseDetailRow._purchaseReceiveDraft = null;
-        syncPurchaseRowStatus(activePurchaseDetailRow, "Received");
-        applyPurchaseFilters();
-        renderPurchaseDetail(activePurchaseDetailRow, { mode: "view" });
+        try {
+            const draft = ensurePurchaseReceiveDraft(activePurchaseDetailRow);
+            const response = await inventoryPost("/api/inventory/purchases/receive", {
+                id: activePurchaseDetailRow.dataset.purchaseId || 0,
+                items_json: JSON.stringify(draft.map((item) => ({
+                    name: item.name,
+                    qty: item.qty || 0,
+                    received_qty: item.receivedQty || 0,
+                    price: item.price || 0,
+                }))),
+            });
+            const row = upsertPurchaseRow(response.row || {});
+            if (row) {
+                activePurchaseDetailRow = row;
+                activePurchaseDetailRow._purchaseReceiveDraft = null;
+                applyPurchaseFilters();
+                renderPurchaseDetail(activePurchaseDetailRow, { mode: "view" });
+            }
+        } catch (error) {
+            handleInventoryError(error, "Penerimaan Pesanan");
+        }
     });
 
     orderDetailConfirmClose.forEach((button) => {
         button.addEventListener("click", closePurchaseCancelConfirm);
     });
 
-    orderDetailConfirmSubmit?.addEventListener("click", () => {
+    orderDetailConfirmSubmit?.addEventListener("click", async () => {
         if (!activePurchaseDetailRow) return;
-        syncPurchaseRowStatus(activePurchaseDetailRow, "Cancelled");
-        activePurchaseDetailRow._purchaseReceiveDraft = null;
-        applyPurchaseFilters();
-        renderPurchaseDetail(activePurchaseDetailRow, { mode: "view" });
+        try {
+            const response = await inventoryPost("/api/inventory/purchases/cancel", {
+                id: activePurchaseDetailRow.dataset.purchaseId || 0,
+            });
+            const row = upsertPurchaseRow(response.row || {});
+            if (row) {
+                activePurchaseDetailRow = row;
+                activePurchaseDetailRow._purchaseReceiveDraft = null;
+                applyPurchaseFilters();
+                renderPurchaseDetail(activePurchaseDetailRow, { mode: "view" });
+            }
+        } catch (error) {
+            handleInventoryError(error, "Batalkan Pesanan");
+        }
     });
     orderDetailClose?.addEventListener("click", () => {
         purchaseDetailModal?.hide();
@@ -7692,18 +9308,55 @@ function initInventoryPage() {
     stockAdjustmentPrice?.addEventListener("blur", () => {
         stockAdjustmentPrice.value = formatCurrencyValue(parseCurrencyValue(stockAdjustmentPrice.value || 0));
     });
-    stockAdjustmentSave?.addEventListener("click", () => {
+    stockAdjustmentSave?.addEventListener("click", async () => {
+        if (!activeProductRow) return;
         const qtyValue = normalizeStockAdjustmentQty();
         const costValue = parseCurrencyValue(stockAdjustmentPrice?.value || 0);
         const noteValue = String(stockAdjustmentNote?.value || "").trim();
-        appendHistoryEntry({
-            mode: stockAdjustmentMode,
-            qty: qtyValue,
-            cost: costValue,
-            reason: stockAdjustmentReason,
-            note: stockAdjustmentReason === "Other" ? noteValue : "",
-        });
-        closeStockAdjustmentModal();
+        try {
+            const response = await inventoryPost("/api/inventory/products/adjust-stock", {
+                product_id: activeProductRow.dataset.productId || 0,
+                mode: stockAdjustmentMode,
+                quantity: qtyValue,
+                supply_price: costValue,
+                reason: stockAdjustmentReason,
+                note: stockAdjustmentReason === "Other" ? noteValue : "",
+            });
+            const product = response.product || {};
+            const movement = response.movement || {};
+            if (pendingProductDetail) {
+                pendingProductDetail.qty = Number(product.qty ?? movement.current_qty ?? pendingProductDetail.qty ?? 0);
+                if (product.price) {
+                    pendingProductDetail.price = product.price;
+                }
+            }
+            activeProductRow.dataset.qty = String(product.qty ?? movement.current_qty ?? (activeProductRow.dataset.qty || 0));
+            activeProductRow.dataset.status = product.status || activeProductRow.dataset.status || "";
+            activeProductRow.dataset.stockState = Number(activeProductRow.dataset.qty || 0) > 0 ? "available" : "empty";
+            const qtyCell = activeProductRow.children[3];
+            if (qtyCell) {
+                qtyCell.textContent = String(product.qty ?? movement.current_qty ?? 0);
+            }
+
+            historyRowsState.unshift({
+                date: movement.created_at ? movement.created_at.split(",")[0] : new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" }),
+                time: movement.created_at ? movement.created_at.split(",")[1]?.trim() || "" : new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+                staffPrimary: movement.staff || "Staff",
+                staffSecondary: "",
+                location: movement.location || "Star Salon",
+                action: movement.note ? `${movement.reason}: ${movement.note}` : (movement.reason || stockAdjustmentReason),
+                delta: Number(movement.actual_delta ?? 0),
+                cost: Number(movement.cost ?? 0),
+                realQty: Number(movement.current_qty ?? product.qty ?? 0),
+            });
+            activeProductRow._inventoryHistory = historyRowsState;
+            syncHistorySummary(pendingProductDetail);
+            renderHistoryRows();
+            applyProductFilters();
+            closeStockAdjustmentModal();
+        } catch (error) {
+            handleInventoryError(error, "Penyesuaian Stok");
+        }
     });
 
     historyStockIncrease?.addEventListener("click", () => openStockAdjustmentModal("increase"));
@@ -7789,6 +9442,7 @@ function initInventoryPage() {
             status: row.dataset.status || "Aktif",
         };
         productModal?.show();
+        void loadProductHistory(row, pendingProductDetail);
     });
 
     variantList?.addEventListener("click", (event) => {
@@ -7844,6 +9498,7 @@ function initInventoryPage() {
         });
     });
 
+    refreshInventoryLookupOptions();
     applyTab("products");
     applyProductModalTab("details");
     applyMasterTab("brands");
@@ -10302,13 +11957,1633 @@ function initVouchersPage() {
         return;
     }
 
-    const chips = Array.from(shell.querySelectorAll(".vouchers-filter-chip"));
-    chips.forEach((chip) => {
-        chip.addEventListener("click", () => {
-            chips.forEach((button) => button.classList.remove("is-active"));
-            chip.classList.add("is-active");
+    const tabs = Array.from(shell.querySelectorAll(".js-vouchers-tab"));
+    const panels = Array.from(shell.querySelectorAll(".js-vouchers-panel"));
+    const fab = shell.querySelector(".js-vouchers-fab");
+    const voucherSearch = shell.querySelector(".js-vouchers-search");
+    const discountSearch = shell.querySelector(".js-vouchers-discount-search");
+    const voucherTypeFilters = Array.from(shell.querySelectorAll(".js-voucher-type-filter"));
+    const voucherTableBody = shell.querySelector(".js-voucher-table-body");
+    const voucherTotalLabel = shell.querySelector(".inventory-table__footer > span");
+    const discountList = shell.querySelector(".js-voucher-discount-list");
+    const voucherFabMenu = shell.querySelector(".js-voucher-fab-menu");
+    const voucherFabClose = shell.querySelector(".js-voucher-fab-close");
+    const voucherCreateTriggers = Array.from(shell.querySelectorAll(".js-voucher-create-trigger"));
+    const voucherPreviewToggles = Array.from(document.querySelectorAll(".js-voucher-preview-toggle"));
+    const voucherServiceModalEl = document.getElementById("voucherServiceModal");
+    const voucherServiceModal = voucherServiceModalEl ? bootstrap.Modal.getOrCreateInstance(voucherServiceModalEl) : null;
+    const voucherGiftModalEl = document.getElementById("voucherGiftModal");
+    const voucherGiftModal = voucherGiftModalEl ? bootstrap.Modal.getOrCreateInstance(voucherGiftModalEl) : null;
+    const voucherServiceName = voucherServiceModalEl?.querySelector(".js-voucher-service-name");
+    const voucherServiceItem = voucherServiceModalEl?.querySelector(".js-voucher-service-item");
+    const voucherServiceQuantity = voucherServiceModalEl?.querySelector(".js-voucher-service-quantity");
+    const voucherServicePrice = voucherServiceModalEl?.querySelector(".js-voucher-service-price");
+    const voucherServiceExpiryMode = voucherServiceModalEl?.querySelector(".js-voucher-service-expiry-mode");
+    const voucherServiceExpiryPicker = voucherServiceModalEl?.querySelector(".js-voucher-service-expiry-picker");
+    const voucherServiceExpiry = voucherServiceModalEl?.querySelector(".js-voucher-service-expiry");
+    const voucherServiceExpiryDropdown = voucherServiceModalEl?.querySelector(".js-voucher-service-expiry-dropdown");
+    const voucherServiceExpiryDateInput = voucherServiceModalEl?.querySelector(".js-voucher-service-expiry-date");
+    const voucherServiceExpiryClear = voucherServiceModalEl?.querySelector(".js-voucher-service-expiry-clear");
+    const voucherServiceLocation = voucherServiceModalEl?.querySelector(".js-voucher-service-location");
+    const voucherServiceMessage = voucherServiceModalEl?.querySelector(".js-voucher-service-message");
+    const voucherServiceMaxWrap = voucherServiceModalEl?.querySelector(".js-voucher-service-max-wrap");
+    const voucherServiceMaxValue = voucherServiceModalEl?.querySelector(".js-voucher-service-max-value");
+    const voucherServiceMaxMinus = voucherServiceModalEl?.querySelector(".js-voucher-service-max-minus");
+    const voucherServiceMaxPlus = voucherServiceModalEl?.querySelector(".js-voucher-service-max-plus");
+    const voucherServicePreviewTitle = voucherServiceModalEl?.querySelector(".js-voucher-service-preview-title");
+    const voucherServicePreviewServices = voucherServiceModalEl?.querySelector(".js-voucher-service-preview-services");
+    const voucherServicePreviewMessage = voucherServiceModalEl?.querySelector(".js-voucher-service-preview-message");
+    const voucherServicePreviewLocation = voucherServiceModalEl?.querySelector(".js-voucher-service-preview-location");
+    const voucherServicePreviewDuration = voucherServiceModalEl?.querySelector(".js-voucher-service-preview-duration");
+    const voucherServiceSave = voucherServiceModalEl?.querySelector(".js-voucher-service-save");
+    const voucherServicePanel = voucherServiceModalEl?.querySelector(".js-voucher-service-panel");
+    const voucherServicePanelClose = voucherServiceModalEl?.querySelector(".js-voucher-service-panel-close");
+    const voucherServicePanelCancel = voucherServiceModalEl?.querySelector("[data-service-panel-cancel]");
+    const voucherServicePanelApply = voucherServiceModalEl?.querySelector(".js-voucher-service-panel-apply");
+    const voucherServicePanelSearch = voucherServiceModalEl?.querySelector(".js-voucher-service-search");
+    const voucherServicePanelOptions = Array.from(voucherServiceModalEl?.querySelectorAll(".js-voucher-service-option") || []);
+    const voucherServiceSelected = voucherServiceModalEl?.querySelector(".js-voucher-service-selected");
+    const voucherServicePanelNotice = voucherServiceModalEl?.querySelector(".js-voucher-service-panel-notice");
+    const voucherLocationPanel = voucherServiceModalEl?.querySelector(".js-voucher-location-panel");
+    const voucherLocationPanelClose = voucherServiceModalEl?.querySelector(".js-voucher-location-panel-close");
+    const voucherLocationPanelApply = voucherServiceModalEl?.querySelector(".js-voucher-location-panel-apply");
+    const voucherLocationSearch = voucherServiceModalEl?.querySelector(".js-voucher-location-search");
+    const voucherLocationOptions = Array.from(voucherServiceModalEl?.querySelectorAll(".js-voucher-location-option") || []);
+    const voucherGiftName = voucherGiftModalEl?.querySelector(".js-voucher-gift-name");
+    const voucherGiftValue = voucherGiftModalEl?.querySelector(".js-voucher-gift-value");
+    const voucherGiftPrice = voucherGiftModalEl?.querySelector(".js-voucher-gift-price");
+    const voucherGiftExpiryMode = voucherGiftModalEl?.querySelector(".js-voucher-gift-expiry-mode");
+    const voucherGiftExpiryPicker = voucherGiftModalEl?.querySelector(".js-voucher-gift-expiry-picker");
+    const voucherGiftExpiry = voucherGiftModalEl?.querySelector(".js-voucher-gift-expiry");
+    const voucherGiftExpiryDropdown = voucherGiftModalEl?.querySelector(".js-voucher-gift-expiry-dropdown");
+    const voucherGiftExpiryDateInput = voucherGiftModalEl?.querySelector(".js-voucher-gift-expiry-date");
+    const voucherGiftExpiryClear = voucherGiftModalEl?.querySelector(".js-voucher-gift-expiry-clear");
+    const voucherGiftLocation = voucherGiftModalEl?.querySelector(".js-voucher-gift-location");
+    const voucherGiftMessage = voucherGiftModalEl?.querySelector(".js-voucher-gift-message");
+    const voucherGiftPreviewTitle = voucherGiftModalEl?.querySelector(".js-voucher-gift-preview-title");
+    const voucherGiftSave = voucherGiftModalEl?.querySelector(".js-voucher-gift-save");
+    const voucherGiftLocationPanel = voucherGiftModalEl?.querySelector(".js-voucher-gift-location-panel");
+    const voucherGiftLocationPanelClose = voucherGiftModalEl?.querySelector(".js-voucher-gift-location-panel-close");
+    const voucherGiftLocationPanelApply = voucherGiftModalEl?.querySelector(".js-voucher-gift-location-panel-apply");
+    const voucherGiftLocationSearch = voucherGiftModalEl?.querySelector(".js-voucher-gift-location-search");
+    const voucherGiftLocationOptions = Array.from(voucherGiftModalEl?.querySelectorAll(".js-voucher-gift-location-option") || []);
+    const discountModalEl = document.getElementById("voucherDiscountModal");
+    const discountModal = discountModalEl ? bootstrap.Modal.getOrCreateInstance(discountModalEl) : null;
+    const discountTitle = discountModalEl?.querySelector(".js-voucher-discount-title");
+    const discountName = discountModalEl?.querySelector(".js-voucher-discount-name");
+    const discountAmount = discountModalEl?.querySelector(".js-voucher-discount-amount");
+    const discountMaxWrap = discountModalEl?.querySelector(".js-voucher-discount-max-wrap");
+    const discountMax = discountModalEl?.querySelector(".js-voucher-discount-max");
+    const discountDelete = discountModalEl?.querySelector(".js-voucher-discount-delete");
+    const discountSave = discountModalEl?.querySelector(".js-voucher-discount-save");
+    const discountModes = Array.from(discountModalEl?.querySelectorAll(".js-voucher-discount-mode") || []);
+    const discountScopeInputs = Array.from(discountModalEl?.querySelectorAll(".js-voucher-discount-scope") || []);
+    let activeTab = "voucher";
+    let activeVoucherType = "all";
+    let activeDiscountMode = "amount";
+    let editingDiscountRow = null;
+    let editingVoucherRow = null;
+    let servicePickerDraft = [];
+    let servicePickerCommitted = [];
+    let serviceCombinedMax = 1;
+    let servicePanelDropdownOpen = false;
+    let servicePanelHideTimer = null;
+    let serviceExpiryDropdownOpen = false;
+    let serviceExpiryPickerInstance = null;
+    let giftExpiryDropdownOpen = false;
+    let giftExpiryPickerInstance = null;
+    let serviceLocationPanelHideTimer = null;
+    let serviceLocationDraft = "Semua Lokasi";
+    let giftLocationPanelHideTimer = null;
+    let giftLocationDraft = "Semua Lokasi";
+
+    const voucherOptionState = {
+        serviceIndex: 0,
+        serviceExpiryIndex: 0,
+        serviceLocationIndex: 0,
+        serviceSpecificDate: "",
+        giftExpiryIndex: 0,
+        giftLocationIndex: 0,
+        giftSpecificDate: "",
+    };
+
+    const relativeExpiryChoices = (() => {
+        const options = ["No Expiry", "After 1 Week", "After 2 Weeks"];
+        for (let month = 1; month <= 11; month += 1) {
+            options.push(`After ${month} Month${month > 1 ? "s" : ""}`);
+        }
+        options.push("After 1 Year");
+        for (let month = 1; month <= 11; month += 1) {
+            options.push(`After 1 Year ${month} Month${month > 1 ? "s" : ""}`);
+        }
+        options.push("After 2 Years");
+        return options;
+    })();
+    const specificExpiryChoices = ["31 Dec 2026", "15 Jan 2027", "28 Feb 2027"];
+    const locationChoices = ["Semua Lokasi", "Star Salon", "Cabang Utama"];
+
+    const normalize = (value) => String(value || "").trim().toLowerCase();
+    const formatDateLabel = (value) => {
+        if (!value) {
+            return "Pilih Hari";
+        }
+        const date = new Date(`${value}T00:00:00`);
+        return Number.isNaN(date.getTime())
+            ? String(value)
+            : date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    };
+    const formatCurrency = (value) => `Rp ${new Intl.NumberFormat("id-ID", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    }).format(Number(value || 0))}`;
+    const formatPercent = (value) => `${new Intl.NumberFormat("id-ID", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    }).format(Number(value || 0))} %`;
+    const formatCurrencyInput = (value) => formatCurrency(Number(value || 0));
+    const formatCurrencyTyping = (value) => {
+        const digits = String(value || "").replace(/\D/g, "");
+        if (!digits) {
+            return "";
+        }
+        return `Rp ${new Intl.NumberFormat("id-ID", {
+            maximumFractionDigits: 0,
+        }).format(Number.parseInt(digits, 10) || 0)}`;
+    };
+    const parseNumber = (value) => {
+        const cleaned = String(value || "").replace(/[^0-9.,]/g, "").replace(/\./g, "").replace(",", ".");
+        const parsed = Number.parseFloat(cleaned);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const sanitizeDiscountInputValue = (value, mode) => {
+        const raw = String(value || "").replace(",", ".");
+        let result = "";
+        let hasDot = false;
+        for (const char of raw) {
+            if (/\d/.test(char)) {
+                result += char;
+                continue;
+            }
+            if (mode === "percent" && char === "." && !hasDot) {
+                result += ".";
+                hasDot = true;
+            }
+        }
+        return result;
+    };
+    const sanitizeDigitsOnly = (value) => String(value || "").replace(/\D/g, "");
+    const formatCurrencyEditable = (value) => {
+        const digits = sanitizeDigitsOnly(value);
+        return digits ? formatCurrencyInput(digits) : "";
+    };
+    const toPlainCurrencyDigits = (value) => {
+        const digits = sanitizeDigitsOnly(value);
+        if (!digits) {
+            return "";
+        }
+        const normalized = String(Number.parseInt(digits, 10) || 0);
+        return normalized === "0" ? "" : normalized;
+    };
+    const getVoucherRows = () => Array.from(shell.querySelectorAll(".js-voucher-row"));
+    const getDiscountRows = () => Array.from(shell.querySelectorAll(".js-voucher-discount-item"));
+    const getCheckedScopes = () => discountScopeInputs
+        .filter((input) => input.checked)
+        .map((input) => input.value);
+    const formatVoucherDuration = (label) => {
+        const normalized = normalize(label);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(String(label || "").trim())) return formatDateLabel(label);
+        if (normalized === "no expiry") return "Tanpa Kadaluarsa";
+        if (normalized.includes("2 weeks")) return "2 Minggu";
+        if (normalized.includes("1 week")) return "1 Minggu";
+        if (normalized.includes("2 years")) return "2 Tahun";
+        if (normalized.includes("1 year 11 months")) return "1 Tahun 11 Bulan";
+        if (normalized.includes("1 year 10 months")) return "1 Tahun 10 Bulan";
+        if (normalized.includes("1 year 9 months")) return "1 Tahun 9 Bulan";
+        if (normalized.includes("1 year 8 months")) return "1 Tahun 8 Bulan";
+        if (normalized.includes("1 year 7 months")) return "1 Tahun 7 Bulan";
+        if (normalized.includes("1 year 6 months")) return "1 Tahun 6 Bulan";
+        if (normalized.includes("1 year 5 months")) return "1 Tahun 5 Bulan";
+        if (normalized.includes("1 year 4 months")) return "1 Tahun 4 Bulan";
+        if (normalized.includes("1 year 3 months")) return "1 Tahun 3 Bulan";
+        if (normalized.includes("1 year 2 months")) return "1 Tahun 2 Bulan";
+        if (normalized.includes("1 year 1 month")) return "1 Tahun 1 Bulan";
+        if (normalized.includes("1 year")) return "1 Tahun";
+        if (normalized.includes("11 months")) return "11 Bulan";
+        if (normalized.includes("10 months")) return "10 Bulan";
+        if (normalized.includes("9 months")) return "9 Bulan";
+        if (normalized.includes("8 months")) return "8 Bulan";
+        if (normalized.includes("7 months")) return "7 Bulan";
+        if (normalized.includes("6 months")) return "6 Bulan";
+        if (normalized.includes("5 months")) return "5 Bulan";
+        if (normalized.includes("4 months")) return "4 Bulan";
+        if (normalized.includes("3 months")) return "3 Bulan";
+        if (normalized.includes("2 months")) return "2 Bulan";
+        if (normalized.includes("1 month")) return "1 Bulan";
+        return label || "1 Bulan";
+    };
+    const buildVoucherSearch = (payload) => normalize([
+        payload.typeLabel,
+        payload.name,
+        payload.value,
+        payload.duration,
+        payload.location,
+        payload.status,
+    ].join(" "));
+    const cloneServiceSelection = (items) => items.map((item) => ({ ...item }));
+    const getServicePanelCount = (items) => items.reduce((total, item) => {
+        const quantity = Number(item.quantity || 0);
+        return quantity > 0 ? total + quantity : total;
+    }, 0);
+    const getServiceCombinedEnabled = () => voucherServiceQuantity?.getAttribute("aria-pressed") === "true";
+    const formatServiceSelectionLabel = (items, isCombined, maxQuantity) => {
+        const selected = items.filter((item) => Number(item.quantity || 0) > 0);
+        if (selected.length === 0) {
+            return "No item";
+        }
+        const names = selected.map((item) => item.name).join(",");
+        return isCombined ? `${maxQuantity}x ${names}` : names;
+    };
+    const formatServicePreviewLine = (item, isCombined, selectedCount) => {
+        const serviceName = String(item?.name || "").trim();
+        const quantity = Math.max(1, Number(item?.quantity || 1) || 1);
+        if (!serviceName) {
+            return "";
+        }
+        if (isCombined) {
+            return serviceName;
+        }
+        return `${quantity}x ${serviceName}`;
+    };
+    const syncCombinedQuantityOnItems = (items, quantity) => {
+        items.forEach((item) => {
+            if (Number(item.quantity || 0) > 0) {
+                item.quantity = quantity;
+            }
+        });
+    };
+    const syncServiceQuantityUI = () => {
+        const isCombined = getServiceCombinedEnabled();
+        if (voucherServiceMaxWrap) {
+            voucherServiceMaxWrap.hidden = !isCombined;
+        }
+        if (voucherServicePanelNotice) {
+            voucherServicePanelNotice.hidden = !isCombined;
+        }
+    };
+    const syncServiceFormLabel = () => {
+        setButtonLabel(
+            voucherServiceItem,
+            formatServiceSelectionLabel(servicePickerCommitted, getServiceCombinedEnabled(), serviceCombinedMax)
+        );
+    };
+    const getServicePreviewItems = () => {
+        const selectedItems = servicePickerCommitted
+            .filter((item) => Number(item.quantity || 0) > 0)
+            .map((item) => ({
+                name: String(item.name || "").trim(),
+                quantity: Math.max(1, Number(item.quantity || 1) || 1),
+            }))
+            .filter((item) => item.name);
+        if (selectedItems.length) {
+            return selectedItems;
+        }
+        const labelItems = parseServiceItemsFromLabel(
+            getButtonLabel(voucherServiceItem),
+            getServiceCombinedEnabled(),
+            serviceCombinedMax
+        );
+        if (labelItems.length) {
+            return labelItems;
+        }
+        const rawLabel = getButtonLabel(voucherServiceItem);
+        if (!rawLabel || normalize(rawLabel) === "no item") {
+            return [];
+        }
+        return rawLabel
+            .replace(/^\d+x\s+/i, "")
+            .split(",")
+            .map((name) => String(name || "").trim())
+            .filter(Boolean)
+            .map((name) => ({ name, quantity: 1 }));
+    };
+    const parseServiceItemsFromLabel = (label, isCombined = false, maxQuantity = 1) => {
+        const rawLabel = String(label || "").trim();
+        if (!rawLabel || normalize(rawLabel) === "no item") {
+            return [];
+        }
+        return rawLabel
+            .replace(/^\d+x\s+/i, "")
+            .split(",")
+            .map((part) => String(part || "").trim())
+            .filter(Boolean)
+            .map((part) => {
+                const match = part.match(/^(\d+)x\s+(.+)$/i);
+                if (match) {
+                    return {
+                        name: String(match[2] || "").trim(),
+                        quantity: Math.max(1, Number(match[1] || 1) || 1),
+                    };
+                }
+                return {
+                    name: part,
+                    quantity: isCombined ? Math.max(1, Number(maxQuantity || 1) || 1) : 1,
+                };
+            })
+            .filter((item) => item.name);
+    };
+    const syncServicePanelApply = () => {
+        if (voucherServicePanelApply) {
+            voucherServicePanelApply.textContent = `Tambahkan (${getServicePanelCount(servicePickerDraft)})`;
+        }
+    };
+    const syncServiceExpiryDropdown = (forceOpen = serviceExpiryDropdownOpen) => {
+        serviceExpiryDropdownOpen = Boolean(forceOpen);
+        voucherServiceExpiryPicker?.classList.toggle("is-open", serviceExpiryDropdownOpen);
+        if (voucherServiceExpiryDropdown instanceof HTMLElement) {
+            voucherServiceExpiryDropdown.hidden = !serviceExpiryDropdownOpen;
+        }
+    };
+    const syncServiceExpiryPickerUI = () => {
+        const isSpecific = voucherServiceExpiryMode?.querySelector("[data-expiry-mode='specific']")?.classList.contains("is-active");
+        const iconNode = voucherServiceExpiry?.querySelector("i");
+        const hasValue = Boolean(voucherOptionState.serviceSpecificDate);
+        voucherServiceExpiryPicker?.classList.toggle("is-specific", Boolean(isSpecific));
+        voucherServiceExpiryPicker?.classList.toggle("has-value", Boolean(isSpecific && hasValue));
+        if (iconNode) {
+            iconNode.className = isSpecific ? "bi bi-calendar3" : "bi bi-chevron-down";
+        }
+        if (voucherServiceExpiryClear instanceof HTMLElement) {
+            voucherServiceExpiryClear.hidden = !(isSpecific && hasValue);
+        }
+    };
+    const renderServiceExpiryOptions = () => {
+        if (!(voucherServiceExpiryDropdown instanceof HTMLElement)) {
+            return;
+        }
+        const currentLabel = getButtonLabel(voucherServiceExpiry) || relativeExpiryChoices[3];
+        voucherServiceExpiryDropdown.innerHTML = relativeExpiryChoices.map((label) => `
+            <button class="voucher-expiry-option ${label === currentLabel ? "is-active" : ""}" type="button" data-expiry-choice="${label}">
+                ${label}
+            </button>
+        `).join("");
+    };
+    const syncGiftExpiryDropdown = (forceOpen = giftExpiryDropdownOpen) => {
+        giftExpiryDropdownOpen = Boolean(forceOpen);
+        voucherGiftExpiryPicker?.classList.toggle("is-open", giftExpiryDropdownOpen);
+        if (voucherGiftExpiryDropdown instanceof HTMLElement) {
+            voucherGiftExpiryDropdown.hidden = !giftExpiryDropdownOpen;
+        }
+    };
+    const syncGiftExpiryPickerUI = () => {
+        const isSpecific = voucherGiftExpiryMode?.querySelector("[data-expiry-mode='specific']")?.classList.contains("is-active");
+        const iconNode = voucherGiftExpiry?.querySelector("i");
+        const hasValue = Boolean(voucherOptionState.giftSpecificDate);
+        voucherGiftExpiryPicker?.classList.toggle("is-specific", Boolean(isSpecific));
+        voucherGiftExpiryPicker?.classList.toggle("has-value", Boolean(isSpecific && hasValue));
+        if (iconNode) {
+            iconNode.className = isSpecific ? "bi bi-calendar3" : "bi bi-chevron-down";
+        }
+        if (voucherGiftExpiryClear instanceof HTMLButtonElement) {
+            voucherGiftExpiryClear.hidden = !(isSpecific && hasValue);
+        }
+    };
+    const renderGiftExpiryOptions = () => {
+        if (!(voucherGiftExpiryDropdown instanceof HTMLElement)) {
+            return;
+        }
+        const currentLabel = getButtonLabel(voucherGiftExpiry) || relativeExpiryChoices[3];
+        voucherGiftExpiryDropdown.innerHTML = relativeExpiryChoices.map((label) => `
+            <button class="voucher-expiry-option ${label === currentLabel ? "is-active" : ""}" type="button" data-gift-expiry-choice="${label}">
+                ${label}
+            </button>
+        `).join("");
+    };
+    const syncLocationOptions = () => {
+        voucherLocationOptions.forEach((option) => {
+            option.classList.toggle("is-selected", (option.dataset.locationName || "") === serviceLocationDraft);
+        });
+    };
+    const syncGiftLocationOptions = () => {
+        voucherGiftLocationOptions.forEach((option) => {
+            option.classList.toggle("is-selected", (option.dataset.locationName || "") === giftLocationDraft);
+        });
+    };
+    const isVoucherEditorActive = (modalEl) => {
+        const toggle = modalEl?.querySelector(".js-voucher-preview-toggle");
+        return !(toggle instanceof HTMLElement) || toggle.classList.contains("is-active");
+    };
+    const syncServicePanelDropdown = (forceOpen = servicePanelDropdownOpen) => {
+        servicePanelDropdownOpen = Boolean(forceOpen);
+        voucherServicePanel?.classList.toggle("is-searching", servicePanelDropdownOpen);
+        const list = voucherServicePanelOptions[0]?.closest(".voucher-service-panel__list");
+        if (list instanceof HTMLElement) {
+            list.hidden = !servicePanelDropdownOpen;
+        }
+    };
+    const renderServicePanelOptions = () => {
+        const query = normalize(voucherServicePanelSearch?.value);
+        voucherServicePanelOptions.forEach((option) => {
+            const name = option.dataset.serviceName || "";
+            const price = option.dataset.servicePrice || "";
+            const duration = option.dataset.serviceDuration || "";
+            const match = !query || normalize(option.dataset.search).includes(query);
+            option.hidden = !match;
+            const selected = servicePickerDraft.find((item) => item.name === name);
+            const qty = Number(selected?.quantity || 0);
+            const action = option.querySelector(".js-voucher-service-option-action");
+            if (!(action instanceof HTMLElement)) {
+                return;
+            }
+            action.innerHTML = "";
+            option.classList.toggle("is-selected", qty > 0);
+            const meta = option.querySelector(".voucher-service-option__meta span");
+            if (meta) {
+                meta.innerHTML = `${price} <i class="bi bi-dot"></i> ${duration}`;
+            }
+        });
+        const isCombined = getServiceCombinedEnabled();
+        if (voucherServiceSelected instanceof HTMLElement) {
+            const selectedItems = servicePickerDraft.filter((item) => Number(item.quantity || 0) > 0);
+            voucherServiceSelected.hidden = selectedItems.length === 0;
+            voucherServiceSelected.innerHTML = selectedItems.map((item) => `
+                <div class="voucher-service-selected__item">
+                    <div class="voucher-service-selected__meta">
+                        <strong>${item.name}</strong>
+                        <span>${item.price}</span>
+                    </div>
+                    ${
+                        isCombined
+                            ? `<button class="voucher-service-option__remove" type="button" data-service-remove="${item.name}">x</button>`
+                            : `
+                                <div class="voucher-service-option__stepper">
+                                    <span>${Number(item.quantity || 0)}</span>
+                                    <button type="button" data-service-minus="${item.name}">-</button>
+                                    <button type="button" data-service-plus="${item.name}">+</button>
+                                </div>
+                            `
+                    }
+                </div>
+            `).join("");
+        }
+        syncServicePanelApply();
+        syncServiceQuantityUI();
+    };
+    const openServicePanel = () => {
+        servicePickerDraft = cloneServiceSelection(servicePickerCommitted);
+        if (voucherServicePanelSearch) {
+            voucherServicePanelSearch.value = "";
+        }
+        if (servicePanelHideTimer) {
+            window.clearTimeout(servicePanelHideTimer);
+            servicePanelHideTimer = null;
+        }
+        voucherServicePanel?.removeAttribute("hidden");
+        voucherServicePanel?.setAttribute("aria-hidden", "false");
+        syncServicePanelDropdown(false);
+        renderServicePanelOptions();
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+                voucherServicePanel?.classList.add("is-open");
+                voucherServicePanelSearch?.focus();
+            });
+        });
+    };
+    const closeServicePanel = (applyChanges) => {
+        if (applyChanges) {
+            servicePickerCommitted = cloneServiceSelection(servicePickerDraft);
+            syncServiceFormLabel();
+            syncServicePreview();
+        }
+        syncServicePanelDropdown(false);
+        voucherServicePanel?.classList.remove("is-open");
+        voucherServicePanel?.setAttribute("aria-hidden", "true");
+        if (servicePanelHideTimer) {
+            window.clearTimeout(servicePanelHideTimer);
+        }
+        servicePanelHideTimer = window.setTimeout(() => {
+            if (!voucherServicePanel?.classList.contains("is-open")) {
+                voucherServicePanel?.setAttribute("hidden", "hidden");
+            }
+            servicePanelHideTimer = null;
+        }, 280);
+    };
+    const openLocationPanel = () => {
+        serviceLocationDraft = getButtonLabel(voucherServiceLocation) || locationChoices[0];
+        voucherLocationSearch && (voucherLocationSearch.value = "");
+        syncLocationOptions();
+        voucherLocationOptions.forEach((option) => {
+            option.hidden = false;
+        });
+        if (serviceLocationPanelHideTimer) {
+            window.clearTimeout(serviceLocationPanelHideTimer);
+            serviceLocationPanelHideTimer = null;
+        }
+        voucherLocationPanel?.removeAttribute("hidden");
+        voucherLocationPanel?.setAttribute("aria-hidden", "false");
+        window.requestAnimationFrame(() => {
+            voucherLocationPanel?.classList.add("is-open");
+            voucherLocationSearch?.focus();
+        });
+    };
+    const closeLocationPanel = (applyChanges) => {
+        if (applyChanges) {
+            voucherOptionState.serviceLocationIndex = Math.max(0, locationChoices.indexOf(serviceLocationDraft));
+            setButtonLabel(voucherServiceLocation, serviceLocationDraft);
+            syncServicePreview();
+        }
+        voucherLocationPanel?.classList.remove("is-open");
+        voucherLocationPanel?.setAttribute("aria-hidden", "true");
+        if (serviceLocationPanelHideTimer) {
+            window.clearTimeout(serviceLocationPanelHideTimer);
+        }
+        serviceLocationPanelHideTimer = window.setTimeout(() => {
+            if (!voucherLocationPanel?.classList.contains("is-open")) {
+                voucherLocationPanel?.setAttribute("hidden", "hidden");
+            }
+            serviceLocationPanelHideTimer = null;
+        }, 280);
+    };
+    const openGiftLocationPanel = () => {
+        giftLocationDraft = getButtonLabel(voucherGiftLocation) || locationChoices[0];
+        voucherGiftLocationSearch && (voucherGiftLocationSearch.value = "");
+        syncGiftLocationOptions();
+        voucherGiftLocationOptions.forEach((option) => {
+            option.hidden = false;
+        });
+        if (giftLocationPanelHideTimer) {
+            window.clearTimeout(giftLocationPanelHideTimer);
+            giftLocationPanelHideTimer = null;
+        }
+        voucherGiftLocationPanel?.removeAttribute("hidden");
+        voucherGiftLocationPanel?.setAttribute("aria-hidden", "false");
+        window.requestAnimationFrame(() => {
+            voucherGiftLocationPanel?.classList.add("is-open");
+            voucherGiftLocationSearch?.focus();
+        });
+    };
+    const closeGiftLocationPanel = (applyChanges) => {
+        if (applyChanges) {
+            voucherOptionState.giftLocationIndex = Math.max(0, locationChoices.indexOf(giftLocationDraft));
+            setButtonLabel(voucherGiftLocation, giftLocationDraft);
+            syncGiftPreview();
+        }
+        voucherGiftLocationPanel?.classList.remove("is-open");
+        voucherGiftLocationPanel?.setAttribute("aria-hidden", "true");
+        if (giftLocationPanelHideTimer) {
+            window.clearTimeout(giftLocationPanelHideTimer);
+        }
+        giftLocationPanelHideTimer = window.setTimeout(() => {
+            if (!voucherGiftLocationPanel?.classList.contains("is-open")) {
+                voucherGiftLocationPanel?.setAttribute("hidden", "hidden");
+            }
+            giftLocationPanelHideTimer = null;
+        }, 280);
+    };
+    const adjustServiceDraftQty = (name, delta) => {
+        const option = voucherServicePanelOptions.find((item) => item.dataset.serviceName === name);
+        if (!option) return;
+        const price = option.dataset.servicePrice || "Rp 0,00";
+        const duration = option.dataset.serviceDuration || "";
+        const current = servicePickerDraft.find((item) => item.name === name);
+        if (!current && delta > 0) {
+            servicePickerDraft.push({ name, price, duration, quantity: 1 });
+        } else if (current) {
+            current.quantity = Math.max(0, Number(current.quantity || 0) + delta);
+            if (current.quantity === 0) {
+                servicePickerDraft = servicePickerDraft.filter((item) => item.name !== name);
+            }
+        }
+        renderServicePanelOptions();
+    };
+    const selectServiceOption = (optionCard) => {
+        if (!(optionCard instanceof HTMLElement)) {
+            return false;
+        }
+        const optionName = optionCard.dataset.serviceName || "";
+        if (!optionName || servicePickerDraft.find((item) => item.name === optionName)) {
+            return false;
+        }
+        const price = optionCard.dataset.servicePrice || "Rp 0,00";
+        const duration = optionCard.dataset.serviceDuration || "";
+        servicePickerDraft.push({
+            name: optionName,
+            price,
+            duration,
+            quantity: getServiceCombinedEnabled() ? serviceCombinedMax : 1,
+        });
+        if (voucherServicePanelSearch) {
+            voucherServicePanelSearch.value = "";
+        }
+        renderServicePanelOptions();
+        syncServicePanelDropdown(false);
+        return true;
+    };
+    const setVoucherToggleState = (toggle, isActive) => {
+        if (!(toggle instanceof HTMLElement)) {
+            return;
+        }
+        toggle.classList.toggle("is-active", isActive);
+        syncVoucherPreviewShell(toggle);
+    };
+    const setButtonLabel = (button, text) => {
+        const labelNode = button?.querySelector("span");
+        if (labelNode) {
+            labelNode.textContent = text;
+        }
+    };
+    const getButtonLabel = (button) => button?.querySelector("span")?.textContent?.trim() || "";
+    const setSaveEnabled = (button, enabled) => {
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+        button.disabled = !enabled;
+        button.classList.toggle("customer-footer-btn--disabled", !enabled);
+        button.classList.toggle("staff-save-btn", enabled);
+    };
+    const ensureServiceExpiryPicker = () => {
+        if (serviceExpiryPickerInstance || !voucherServiceExpiryDateInput || typeof flatpickr === "undefined") {
+            return serviceExpiryPickerInstance;
+        }
+        try {
+            serviceExpiryPickerInstance = flatpickr(voucherServiceExpiryDateInput, {
+                dateFormat: "Y-m-d",
+                appendTo: voucherServiceExpiryPicker || undefined,
+                positionElement: voucherServiceExpiry || undefined,
+                position: "below left",
+                onChange: (_selectedDates, dateStr) => {
+                    voucherOptionState.serviceSpecificDate = dateStr;
+                    setButtonLabel(voucherServiceExpiry, formatDateLabel(dateStr));
+                    syncServiceExpiryPickerUI();
+                    syncServiceExpiryDropdown(false);
+                    syncServicePreview();
+                },
+                onOpen: () => {
+                    syncServiceExpiryPickerUI();
+                    syncServiceExpiryDropdown(false);
+                },
+            });
+        } catch (error) {
+            console.error("[vouchers] service expiry picker", error);
+            serviceExpiryPickerInstance = null;
+        }
+        return serviceExpiryPickerInstance;
+    };
+    const ensureGiftExpiryPicker = () => {
+        if (giftExpiryPickerInstance || !voucherGiftExpiryDateInput || typeof flatpickr === "undefined") {
+            return giftExpiryPickerInstance;
+        }
+        try {
+            giftExpiryPickerInstance = flatpickr(voucherGiftExpiryDateInput, {
+                dateFormat: "Y-m-d",
+                appendTo: voucherGiftExpiryPicker || undefined,
+                positionElement: voucherGiftExpiry || undefined,
+                position: "below left",
+                onChange: (_selectedDates, dateStr) => {
+                    voucherOptionState.giftSpecificDate = dateStr;
+                    setButtonLabel(voucherGiftExpiry, formatDateLabel(dateStr));
+                    syncGiftExpiryPickerUI();
+                    syncGiftExpiryDropdown(false);
+                    syncGiftPreview();
+                },
+                onOpen: () => {
+                    syncGiftExpiryPickerUI();
+                    syncGiftExpiryDropdown(false);
+                },
+            });
+        } catch (error) {
+            console.error("[vouchers] gift expiry picker", error);
+            giftExpiryPickerInstance = null;
+        }
+        return giftExpiryPickerInstance;
+    };
+    const updateVoucherTotal = () => {
+        if (voucherTotalLabel) {
+            voucherTotalLabel.textContent = `Total ${getVoucherRows().length}`;
+        }
+    };
+    const syncVoucherRowData = (row, payload) => {
+        row.dataset.voucherType = payload.typeKey;
+        row.dataset.voucherTypeCode = payload.typeCode;
+        row.dataset.voucherTypeLabel = payload.typeLabel;
+        row.dataset.voucherName = payload.name;
+        row.dataset.voucherValue = payload.value;
+        row.dataset.voucherEditorValue = payload.editorValue;
+        row.dataset.voucherDuration = payload.duration;
+        row.dataset.voucherExpiryLabel = payload.expiryLabel;
+        row.dataset.voucherExpiryValue = payload.expiryValue || payload.expiryLabel;
+        row.dataset.voucherLocation = payload.location;
+        row.dataset.voucherStatus = payload.status;
+        row.dataset.voucherServiceName = payload.serviceName || "";
+        row.dataset.voucherMessage = payload.message || "Thank you!";
+        row.dataset.voucherActive = payload.active ? "1" : "0";
+        row.dataset.voucherServices = payload.servicesJson || "[]";
+        row.dataset.voucherCombineQuantity = payload.combineQuantity ? "1" : "0";
+        row.dataset.voucherMaxQuantity = String(payload.maxQuantity || 1);
+        row.dataset.search = buildVoucherSearch(payload);
+        const statusClass = payload.active ? "voucher-table__status" : "voucher-table__status voucher-table__status--inactive";
+        row.innerHTML = `
+            <td>
+                <div class="voucher-table__type">
+                    <span class="voucher-table__badge voucher-table__badge--${payload.typeKey}">${payload.typeCode}</span>
+                    <strong>${payload.typeLabel}</strong>
+                </div>
+            </td>
+            <td><strong>${payload.name}</strong></td>
+            <td>${payload.value}</td>
+            <td>${payload.duration}</td>
+            <td>${payload.location}</td>
+            <td><span class="${statusClass}">${payload.status}</span></td>
+        `;
+    };
+    const upsertVoucherRow = (payload) => {
+        if (!voucherTableBody) return null;
+        let row = editingVoucherRow;
+        if (!row) {
+            row = document.createElement("tr");
+            row.className = "js-voucher-row";
+            voucherTableBody.prepend(row);
+        }
+        syncVoucherRowData(row, payload);
+        updateVoucherTotal();
+        applyVoucherSearch();
+        return row;
+    };
+
+    const syncDiscountMode = (mode) => {
+        activeDiscountMode = mode === "percent" ? "percent" : "amount";
+        discountModes.forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.mode === activeDiscountMode);
+        });
+        if (discountMaxWrap) {
+            discountMaxWrap.hidden = activeDiscountMode !== "percent";
+        }
+        if (discountAmount) {
+            discountAmount.value = activeDiscountMode === "percent"
+                ? sanitizeDiscountInputValue(discountAmount.value, activeDiscountMode)
+                : formatCurrencyTyping(discountAmount.value);
+            discountAmount.placeholder = activeDiscountMode === "percent" ? "1.25 %" : "0";
+        }
+        if (discountMax) {
+            discountMax.value = formatCurrencyTyping(discountMax.value);
+            discountMax.placeholder = "0";
+        }
+    };
+
+    const buildDiscountSearch = (name, label) => normalize(`${name} ${label}`);
+
+    const toggleVoucherFabMenu = (forceOpen = null) => {
+        if (!voucherFabMenu) {
+            return;
+        }
+        const shouldOpen = forceOpen === null ? voucherFabMenu.hidden : forceOpen;
+        voucherFabMenu.hidden = !shouldOpen;
+        voucherFabMenu.classList.toggle("is-open", shouldOpen);
+    };
+
+    const applyVoucherSearch = () => {
+        const query = normalize(voucherSearch?.value);
+        voucherTypeFilters.forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.voucherType === activeVoucherType);
+        });
+        getVoucherRows().forEach((row) => {
+            const matchesType = activeVoucherType === "all" || row.dataset.voucherType === activeVoucherType;
+            const matchesQuery = !query || normalize(row.dataset.search).includes(query);
+            row.hidden = !(matchesType && matchesQuery);
+        });
+    };
+
+    const applyDiscountSearch = () => {
+        const query = normalize(discountSearch?.value);
+        getDiscountRows().forEach((row) => {
+            row.hidden = query && !normalize(row.dataset.search).includes(query);
+        });
+    };
+    const syncVoucherPreviewShell = (toggle) => {
+        if (!(toggle instanceof HTMLElement)) {
+            return;
+        }
+        const shellNode = toggle.closest(".vouchers-preview-shell");
+        if (!(shellNode instanceof HTMLElement)) {
+            return;
+        }
+        const body = shellNode.querySelector(".js-voucher-preview-body");
+        const empty = shellNode.querySelector(".js-voucher-preview-empty");
+        const isActive = toggle.classList.contains("is-active");
+        toggle.setAttribute("aria-pressed", isActive ? "true" : "false");
+        if (body instanceof HTMLElement) {
+            body.hidden = !isActive;
+        }
+        if (empty instanceof HTMLElement) {
+            empty.hidden = isActive;
+        }
+    };
+
+    const applyTab = (tabName) => {
+        activeTab = tabName === "discount" ? "discount" : "voucher";
+        tabs.forEach((tab) => {
+            const isActive = tab.dataset.vouchersTab === activeTab;
+            tab.classList.toggle("is-active", isActive);
+            tab.setAttribute("aria-selected", isActive ? "true" : "false");
+        });
+        panels.forEach((panel) => {
+            const isActive = panel.dataset.vouchersPanel === activeTab;
+            panel.classList.toggle("is-active", isActive);
+            panel.hidden = !isActive;
+        });
+        if (activeTab !== "voucher") {
+            toggleVoucherFabMenu(false);
+        }
+    };
+
+    const resetDiscountForm = () => {
+        editingDiscountRow = null;
+        if (discountTitle) discountTitle.textContent = "Buat Diskon";
+        if (discountName) discountName.value = "";
+        if (discountAmount) discountAmount.value = formatCurrencyInput(0);
+        if (discountMax) discountMax.value = formatCurrencyInput(0);
+        if (discountDelete) discountDelete.hidden = true;
+        discountScopeInputs.forEach((input) => {
+            input.checked = true;
+        });
+        syncDiscountMode("amount");
+    };
+
+    const populateDiscountForm = (row) => {
+        editingDiscountRow = row;
+        if (discountTitle) discountTitle.textContent = "Edit Diskon";
+        if (discountName) discountName.value = row.dataset.discountName || "";
+        if (discountAmount) {
+            discountAmount.value = (row.dataset.discountMode || "amount") === "percent"
+                ? sanitizeDiscountInputValue(row.dataset.discountAmount || "", "percent")
+                : formatCurrencyTyping(row.dataset.discountAmount || "");
+        }
+        if (discountMax) {
+            discountMax.value = formatCurrencyTyping(row.dataset.discountMax || "");
+        }
+        let scopes = [];
+        try {
+            scopes = JSON.parse(row.dataset.discountScopes || "[]");
+        } catch (error) {
+            scopes = [];
+        }
+        discountScopeInputs.forEach((input) => {
+            input.checked = scopes.length === 0 || scopes.includes(input.value);
+        });
+        if (discountDelete) discountDelete.hidden = false;
+        syncDiscountMode(row.dataset.discountMode || "amount");
+    };
+
+    const buildDiscountRow = (payload) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "voucher-discount-item js-voucher-discount-item";
+        row.dataset.discountId = payload.id;
+        row.dataset.discountName = payload.name;
+        row.dataset.discountMode = payload.mode;
+        row.dataset.discountAmount = String(payload.amount);
+        row.dataset.discountMax = payload.maxLabel;
+        row.dataset.discountScopes = JSON.stringify(payload.scopes);
+        row.dataset.search = buildDiscountSearch(payload.name, payload.amountLabel);
+        row.innerHTML = `<strong>${payload.name}</strong><span>${payload.amountLabel}</span>`;
+        return row;
+    };
+
+    const saveDiscount = () => {
+        const name = String(discountName?.value || "").trim();
+        if (!name) {
+            discountName?.focus();
+            return;
+        }
+        const amount = parseNumber(discountAmount?.value || 0);
+        const maxValue = parseNumber(discountMax?.value || 0);
+        const scopes = getCheckedScopes();
+        const amountLabel = activeDiscountMode === "percent"
+            ? formatPercent(amount)
+            : formatCurrency(amount);
+        const payload = {
+            id: editingDiscountRow?.dataset.discountId || String(Date.now()),
+            name,
+            mode: activeDiscountMode,
+            amount,
+            amountLabel,
+            maxLabel: activeDiscountMode === "percent" ? formatCurrency(maxValue) : "",
+            scopes,
+        };
+        const targetRow = editingDiscountRow || buildDiscountRow(payload);
+        targetRow.dataset.discountId = payload.id;
+        targetRow.dataset.discountName = payload.name;
+        targetRow.dataset.discountMode = payload.mode;
+        targetRow.dataset.discountAmount = String(payload.amount);
+        targetRow.dataset.discountMax = payload.maxLabel;
+        targetRow.dataset.discountScopes = JSON.stringify(payload.scopes);
+        targetRow.dataset.search = buildDiscountSearch(payload.name, payload.amountLabel);
+        targetRow.innerHTML = `<strong>${payload.name}</strong><span>${payload.amountLabel}</span>`;
+        if (!editingDiscountRow) {
+            discountList?.prepend(targetRow);
+        }
+        discountModal?.hide();
+        applyDiscountSearch();
+    };
+
+    const openDiscountCreate = () => {
+        resetDiscountForm();
+        discountModal?.show();
+    };
+
+    const openDiscountEdit = (row) => {
+        populateDiscountForm(row);
+        discountModal?.show();
+    };
+    const syncServicePreview = () => {
+        syncServiceFormLabel();
+        const currentServiceLabel = getButtonLabel(voucherServiceItem);
+        const selectedItems = getServicePreviewItems();
+        const isCombined = getServiceCombinedEnabled();
+        const selectedServiceLabel = formatServiceSelectionLabel(
+            servicePickerCommitted,
+            getServiceCombinedEnabled(),
+            serviceCombinedMax
+        );
+        const fallbackServiceLabel = normalize(selectedServiceLabel) !== "no item"
+            ? selectedServiceLabel
+            : (normalize(currentServiceLabel) !== "no item" ? currentServiceLabel : "");
+        const displayName = String(voucherServiceName?.value || "").trim() || fallbackServiceLabel || "Voucher Layanan";
+        if (voucherServicePreviewTitle) {
+            voucherServicePreviewTitle.textContent = displayName;
+        }
+        if (voucherServicePreviewServices) {
+            const serviceLines = selectedItems.length
+                ? selectedItems
+                    .map((item) => formatServicePreviewLine(item, isCombined, selectedItems.length))
+                    .filter(Boolean)
+                : parseServiceItemsFromLabel(
+                    fallbackServiceLabel,
+                    isCombined,
+                    serviceCombinedMax
+                ).map((item, index, items) => formatServicePreviewLine(item, isCombined, items.length)).filter(Boolean);
+            voucherServicePreviewServices.innerHTML = selectedItems.length
+                ? serviceLines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")
+                : serviceLines.length
+                    ? serviceLines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")
+                    : "";
+        }
+        if (voucherServicePreviewMessage) {
+            voucherServicePreviewMessage.textContent = String(voucherServiceMessage?.value || "").trim() || "Thank you!";
+        }
+        if (voucherServicePreviewLocation) {
+            voucherServicePreviewLocation.innerHTML = `<i class="bi bi-geo-alt"></i> Dapat digunakan di ${getButtonLabel(voucherServiceLocation) || "Semua Lokasi"}`;
+        }
+        if (voucherServicePreviewDuration) {
+            voucherServicePreviewDuration.textContent = `Valid untuk ${formatVoucherDuration(voucherOptionState.serviceSpecificDate || getButtonLabel(voucherServiceExpiry) || "After 1 Month")}`;
+        }
+        setSaveEnabled(voucherServiceSave, String(voucherServiceName?.value || "").trim() !== "" && servicePickerCommitted.length > 0);
+    };
+    const syncGiftPreview = () => {
+        if (voucherGiftPreviewTitle) {
+            const digits = sanitizeDigitsOnly(voucherGiftValue?.value || "");
+            voucherGiftPreviewTitle.textContent = digits ? formatCurrency(digits) : "Rp 0,00";
+        }
+        setSaveEnabled(voucherGiftSave, String(voucherGiftName?.value || "").trim() !== "");
+    };
+    const resetServiceEditor = () => {
+        editingVoucherRow = null;
+        voucherOptionState.serviceExpiryIndex = 3;
+        voucherOptionState.serviceLocationIndex = 0;
+        voucherOptionState.serviceSpecificDate = "";
+        serviceCombinedMax = 1;
+        servicePickerCommitted = [];
+        servicePickerDraft = [];
+        if (voucherServiceModalEl?.querySelector(".customer-modal__header h2")) {
+            voucherServiceModalEl.querySelector(".customer-modal__header h2").textContent = "Voucher Layanan Baru";
+        }
+        if (voucherServiceName) voucherServiceName.value = "";
+        if (voucherServiceQuantity instanceof HTMLButtonElement) {
+            voucherServiceQuantity.setAttribute("aria-pressed", "false");
+            voucherServiceQuantity.classList.remove("is-active");
+        }
+        if (voucherServiceMaxValue) {
+            voucherServiceMaxValue.textContent = "1";
+        }
+        if (voucherServicePrice) voucherServicePrice.value = formatCurrencyInput(0);
+        voucherServiceExpiryMode?.querySelectorAll("button").forEach((button, index) => {
+            button.classList.toggle("is-active", index === 0);
+        });
+        setButtonLabel(voucherServiceExpiry, relativeExpiryChoices[3]);
+        setButtonLabel(voucherServiceLocation, locationChoices[0]);
+        syncServiceExpiryPickerUI();
+        if (voucherServiceMessage) voucherServiceMessage.value = "Thank you!";
+        setVoucherToggleState(voucherServiceModalEl?.querySelector(".js-voucher-preview-toggle"), true);
+        serviceExpiryPickerInstance?.clear();
+        closeServicePanel(false);
+        syncServiceExpiryDropdown(false);
+        closeLocationPanel(false);
+        syncServiceQuantityUI();
+        syncServicePreview();
+    };
+    const resetGiftEditor = () => {
+        editingVoucherRow = null;
+        voucherOptionState.giftExpiryIndex = 3;
+        voucherOptionState.giftLocationIndex = 0;
+        voucherOptionState.giftSpecificDate = "";
+        if (voucherGiftModalEl?.querySelector(".customer-modal__header h2")) {
+            voucherGiftModalEl.querySelector(".customer-modal__header h2").textContent = "Voucher Hadiah Baru";
+        }
+        if (voucherGiftName) voucherGiftName.value = "";
+        if (voucherGiftValue) voucherGiftValue.value = formatCurrencyInput(0);
+        if (voucherGiftPrice) voucherGiftPrice.value = formatCurrencyInput(0);
+        voucherGiftExpiryMode?.querySelectorAll("button").forEach((button, index) => {
+            button.classList.toggle("is-active", index === 0);
+        });
+        setButtonLabel(voucherGiftExpiry, relativeExpiryChoices[3]);
+        setButtonLabel(voucherGiftLocation, locationChoices[0]);
+        if (voucherGiftMessage) voucherGiftMessage.value = "Thank you!";
+        setVoucherToggleState(voucherGiftModalEl?.querySelector(".js-voucher-preview-toggle"), true);
+        giftExpiryPickerInstance?.clear();
+        syncGiftExpiryDropdown(false);
+        syncGiftExpiryPickerUI();
+        closeGiftLocationPanel(false);
+        syncGiftPreview();
+    };
+    const populateServiceEditor = (row) => {
+        editingVoucherRow = row;
+        if (voucherServiceModalEl?.querySelector(".customer-modal__header h2")) {
+            voucherServiceModalEl.querySelector(".customer-modal__header h2").textContent = "Edit Voucher Layanan";
+        }
+        if (voucherServiceName) voucherServiceName.value = row.dataset.voucherName || "";
+        try {
+            servicePickerCommitted = JSON.parse(row.dataset.voucherServices || "[]");
+        } catch (error) {
+            servicePickerCommitted = [];
+        }
+        if (voucherServicePrice) {
+            voucherServicePrice.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherEditorValue || "0"));
+        }
+        setButtonLabel(voucherServiceExpiry, row.dataset.voucherExpiryLabel || "After 1 Month");
+        setButtonLabel(voucherServiceLocation, row.dataset.voucherLocation || "Semua Lokasi");
+        if (voucherServiceMessage) voucherServiceMessage.value = row.dataset.voucherMessage || "Thank you!";
+        if (voucherServiceQuantity instanceof HTMLButtonElement) {
+            const isCombined = row.dataset.voucherCombineQuantity === "1";
+            voucherServiceQuantity.setAttribute("aria-pressed", isCombined ? "true" : "false");
+            voucherServiceQuantity.classList.toggle("is-active", isCombined);
+        }
+        serviceCombinedMax = Number(row.dataset.voucherMaxQuantity || 1) || 1;
+        if (voucherServiceMaxValue) {
+            voucherServiceMaxValue.textContent = String(serviceCombinedMax);
+        }
+        if (!servicePickerCommitted.length) {
+            servicePickerCommitted = parseServiceItemsFromLabel(
+                row.dataset.voucherValue || row.dataset.voucherServiceName || "",
+                row.dataset.voucherCombineQuantity === "1",
+                serviceCombinedMax
+            );
+        }
+        voucherServiceExpiryMode?.querySelectorAll("button").forEach((button) => {
+            const rowExpiry = row.dataset.voucherExpiryLabel || "";
+            const mode = normalize(rowExpiry).startsWith("after") || normalize(rowExpiry) === "no expiry" ? "relative" : "specific";
+            button.classList.toggle("is-active", (button.dataset.expiryMode || "relative") === mode);
+        });
+        voucherOptionState.serviceSpecificDate = normalize(row.dataset.voucherExpiryLabel).startsWith("after") || normalize(row.dataset.voucherExpiryLabel) === "no expiry"
+            ? ""
+            : (row.dataset.voucherExpiryValue || "");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(voucherOptionState.serviceSpecificDate)) {
+            serviceExpiryPickerInstance?.setDate(voucherOptionState.serviceSpecificDate, false);
+            setButtonLabel(voucherServiceExpiry, formatDateLabel(voucherOptionState.serviceSpecificDate));
+        } else {
+            serviceExpiryPickerInstance?.clear();
+        }
+        syncServiceExpiryPickerUI();
+        setVoucherToggleState(voucherServiceModalEl?.querySelector(".js-voucher-preview-toggle"), row.dataset.voucherActive !== "0");
+        syncServiceQuantityUI();
+        syncServicePreview();
+    };
+    const populateGiftEditor = (row) => {
+        editingVoucherRow = row;
+        if (voucherGiftModalEl?.querySelector(".customer-modal__header h2")) {
+            voucherGiftModalEl.querySelector(".customer-modal__header h2").textContent = "Edit Voucher Hadiah";
+        }
+        if (voucherGiftName) voucherGiftName.value = row.dataset.voucherName || "";
+        if (voucherGiftValue) voucherGiftValue.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherEditorValue || "0"));
+        if (voucherGiftPrice) voucherGiftPrice.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherEditorValue || "0"));
+        setButtonLabel(voucherGiftExpiry, row.dataset.voucherExpiryLabel || "After 1 Month");
+        setButtonLabel(voucherGiftLocation, row.dataset.voucherLocation || "Semua Lokasi");
+        if (voucherGiftMessage) voucherGiftMessage.value = row.dataset.voucherMessage || "Thank you!";
+        voucherGiftExpiryMode?.querySelectorAll("button").forEach((button) => {
+            const rowExpiry = row.dataset.voucherExpiryLabel || "";
+            const mode = /\d/.test(rowExpiry) && !normalize(rowExpiry).includes("after") ? "specific" : "relative";
+            button.classList.toggle("is-active", (button.dataset.expiryMode || "relative") === mode);
+        });
+        voucherOptionState.giftSpecificDate = /^\d{4}-\d{2}-\d{2}$/.test(row.dataset.voucherExpiryValue || "")
+            ? (row.dataset.voucherExpiryValue || "")
+            : "";
+        if (/^\d{4}-\d{2}-\d{2}$/.test(voucherOptionState.giftSpecificDate)) {
+            giftExpiryPickerInstance?.setDate(voucherOptionState.giftSpecificDate, false);
+            setButtonLabel(voucherGiftExpiry, formatDateLabel(voucherOptionState.giftSpecificDate));
+        } else {
+            giftExpiryPickerInstance?.clear();
+        }
+        syncGiftExpiryDropdown(false);
+        syncGiftExpiryPickerUI();
+        setVoucherToggleState(voucherGiftModalEl?.querySelector(".js-voucher-preview-toggle"), row.dataset.voucherActive !== "0");
+        closeGiftLocationPanel(false);
+        syncGiftPreview();
+    };
+    const saveServiceVoucher = () => {
+        const name = String(voucherServiceName?.value || "").trim();
+        if (!name) {
+            voucherServiceName?.focus();
+            return;
+        }
+        upsertVoucherRow({
+            typeKey: "service",
+            typeCode: "S",
+            typeLabel: "Service Type",
+            name,
+            value: formatServiceSelectionLabel(servicePickerCommitted, getServiceCombinedEnabled(), serviceCombinedMax),
+            editorValue: sanitizeDigitsOnly(voucherServicePrice?.value || "0"),
+            duration: formatVoucherDuration(getButtonLabel(voucherServiceExpiry) || "After 1 Month"),
+            expiryLabel: getButtonLabel(voucherServiceExpiry) || "After 1 Month",
+            expiryValue: voucherOptionState.serviceSpecificDate || getButtonLabel(voucherServiceExpiry) || "After 1 Month",
+            location: getButtonLabel(voucherServiceLocation) || "Semua Lokasi",
+            status: isVoucherEditorActive(voucherServiceModalEl) ? "Active" : "Disable",
+            serviceName: formatServiceSelectionLabel(servicePickerCommitted, getServiceCombinedEnabled(), serviceCombinedMax),
+            message: String(voucherServiceMessage?.value || "").trim() || "Thank you!",
+            active: isVoucherEditorActive(voucherServiceModalEl),
+            servicesJson: JSON.stringify(servicePickerCommitted),
+            combineQuantity: getServiceCombinedEnabled(),
+            maxQuantity: serviceCombinedMax,
+        });
+        voucherServiceModal?.hide();
+    };
+    const saveGiftVoucher = () => {
+        const name = String(voucherGiftName?.value || "").trim();
+        if (!name) {
+            voucherGiftName?.focus();
+            return;
+        }
+        const amountDigits = sanitizeDigitsOnly(voucherGiftValue?.value || "0");
+        upsertVoucherRow({
+            typeKey: "gift",
+            typeCode: "G",
+            typeLabel: "Gift Type",
+            name,
+            value: formatCurrency(amountDigits || 0),
+            editorValue: amountDigits || "0",
+            duration: formatVoucherDuration(getButtonLabel(voucherGiftExpiry) || "After 1 Month"),
+            expiryLabel: getButtonLabel(voucherGiftExpiry) || "After 1 Month",
+            expiryValue: voucherOptionState.giftSpecificDate || getButtonLabel(voucherGiftExpiry) || "After 1 Month",
+            location: getButtonLabel(voucherGiftLocation) || "Semua Lokasi",
+            status: isVoucherEditorActive(voucherGiftModalEl) ? "Active" : "Disable",
+            serviceName: "",
+            message: String(voucherGiftMessage?.value || "").trim() || "Thank you!",
+            active: isVoucherEditorActive(voucherGiftModalEl),
+        });
+        voucherGiftModal?.hide();
+    };
+
+    tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+            applyTab(tab.dataset.vouchersTab || "voucher");
         });
     });
+
+    voucherTypeFilters.forEach((button) => {
+        button.addEventListener("click", () => {
+            activeVoucherType = button.dataset.voucherType || "all";
+            applyVoucherSearch();
+        });
+    });
+
+    voucherSearch?.addEventListener("input", applyVoucherSearch);
+    discountSearch?.addEventListener("input", applyDiscountSearch);
+
+    fab?.addEventListener("click", () => {
+        if (activeTab === "discount") {
+            openDiscountCreate();
+            return;
+        }
+        toggleVoucherFabMenu();
+    });
+
+    voucherFabClose?.addEventListener("click", () => {
+        toggleVoucherFabMenu(false);
+    });
+
+    voucherCreateTriggers.forEach((button) => {
+        button.addEventListener("click", () => {
+            toggleVoucherFabMenu(false);
+            const target = button.dataset.voucherCreate || "service";
+            if (target === "gift") {
+                resetGiftEditor();
+                voucherGiftModal?.show();
+                return;
+            }
+            resetServiceEditor();
+            voucherServiceModal?.show();
+        });
+    });
+
+    voucherPreviewToggles.forEach((toggle) => {
+        syncVoucherPreviewShell(toggle);
+        toggle.addEventListener("click", () => {
+            toggle.classList.toggle("is-active");
+            syncVoucherPreviewShell(toggle);
+        });
+    });
+
+    discountList?.addEventListener("click", (event) => {
+        const row = event.target instanceof HTMLElement ? event.target.closest(".js-voucher-discount-item") : null;
+        if (!row) {
+            return;
+        }
+        openDiscountEdit(row);
+    });
+
+    discountModes.forEach((button) => {
+        button.addEventListener("click", () => {
+            syncDiscountMode(button.dataset.mode || "amount");
+        });
+    });
+
+    discountAmount?.addEventListener("input", () => {
+        discountAmount.value = activeDiscountMode === "percent"
+            ? sanitizeDiscountInputValue(discountAmount.value, activeDiscountMode)
+            : formatCurrencyTyping(discountAmount.value);
+    });
+
+    discountMax?.addEventListener("input", () => {
+        discountMax.value = formatCurrencyTyping(discountMax.value);
+    });
+
+    discountAmount?.addEventListener("focus", () => {
+        if (activeDiscountMode === "amount") {
+            discountAmount.value = discountAmount.value === formatCurrencyInput(0)
+                ? ""
+                : formatCurrencyTyping(discountAmount.value);
+        }
+    });
+
+    discountMax?.addEventListener("focus", () => {
+        discountMax.value = discountMax.value === formatCurrencyInput(0)
+            ? ""
+            : formatCurrencyTyping(discountMax.value);
+    });
+
+    discountAmount?.addEventListener("blur", () => {
+        if (activeDiscountMode === "amount") {
+            const digits = sanitizeDigitsOnly(discountAmount.value);
+            discountAmount.value = digits ? formatCurrencyInput(digits) : formatCurrencyInput(0);
+        }
+    });
+
+    discountMax?.addEventListener("blur", () => {
+        const digits = sanitizeDigitsOnly(discountMax.value);
+        discountMax.value = digits ? formatCurrencyInput(digits) : formatCurrencyInput(0);
+    });
+
+    discountDelete?.addEventListener("click", () => {
+        if (!editingDiscountRow) {
+            return;
+        }
+        editingDiscountRow.remove();
+        editingDiscountRow = null;
+        discountModal?.hide();
+        applyDiscountSearch();
+    });
+
+    discountSave?.addEventListener("click", saveDiscount);
+
+    voucherTableBody?.addEventListener("click", (event) => {
+        const row = event.target instanceof HTMLElement ? event.target.closest(".js-voucher-row") : null;
+        if (!(row instanceof HTMLElement)) {
+            return;
+        }
+        if (row.dataset.voucherType === "gift") {
+            populateGiftEditor(row);
+            voucherGiftModal?.show();
+            return;
+        }
+        populateServiceEditor(row);
+        voucherServiceModal?.show();
+    });
+
+    voucherServiceName?.addEventListener("input", syncServicePreview);
+    voucherServiceMessage?.addEventListener("input", syncServicePreview);
+    voucherServicePrice?.addEventListener("input", () => {
+        voucherServicePrice.value = formatCurrencyTyping(voucherServicePrice.value);
+    });
+    voucherServicePrice?.addEventListener("blur", () => {
+        const digits = sanitizeDigitsOnly(voucherServicePrice.value);
+        voucherServicePrice.value = digits ? formatCurrencyInput(digits) : formatCurrencyInput(0);
+    });
+    voucherServiceItem?.addEventListener("click", () => {
+        openServicePanel();
+    });
+    voucherServiceExpiryMode?.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+            const mode = button.dataset.expiryMode || "relative";
+            voucherServiceExpiryMode.querySelectorAll("button").forEach((item) => {
+                item.classList.toggle("is-active", item === button);
+            });
+            if (mode === "specific") {
+                setButtonLabel(voucherServiceExpiry, voucherOptionState.serviceSpecificDate ? formatDateLabel(voucherOptionState.serviceSpecificDate) : "Pilih Hari");
+                syncServiceExpiryDropdown(false);
+            } else {
+                if (!relativeExpiryChoices[voucherOptionState.serviceExpiryIndex]) {
+                    voucherOptionState.serviceExpiryIndex = 3;
+                }
+                setButtonLabel(voucherServiceExpiry, relativeExpiryChoices[voucherOptionState.serviceExpiryIndex]);
+                renderServiceExpiryOptions();
+            }
+            syncServiceExpiryPickerUI();
+            if (mode === "specific") ensureServiceExpiryPicker()?.open();
+            syncServicePreview();
+        });
+    });
+    voucherServiceExpiry?.addEventListener("click", () => {
+        const isSpecific = voucherServiceExpiryMode?.querySelector("[data-expiry-mode='specific']")?.classList.contains("is-active");
+        if (isSpecific) {
+            ensureServiceExpiryPicker()?.open();
+        } else {
+            renderServiceExpiryOptions();
+            syncServiceExpiryDropdown(!serviceExpiryDropdownOpen);
+        }
+    });
+    voucherServiceExpiryClear?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        voucherOptionState.serviceSpecificDate = "";
+        serviceExpiryPickerInstance?.clear();
+        setButtonLabel(voucherServiceExpiry, "Pilih Hari");
+        syncServiceExpiryPickerUI();
+        syncServiceExpiryDropdown(false);
+        syncServicePreview();
+    });
+    voucherServiceLocation?.addEventListener("click", () => {
+        openLocationPanel();
+    });
+    voucherServiceQuantity?.addEventListener("click", () => {
+        const isPressed = voucherServiceQuantity.getAttribute("aria-pressed") === "true";
+        voucherServiceQuantity.setAttribute("aria-pressed", isPressed ? "false" : "true");
+        voucherServiceQuantity.classList.toggle("is-active", !isPressed);
+        if (isPressed) {
+            serviceCombinedMax = 1;
+            if (voucherServiceMaxValue) {
+                voucherServiceMaxValue.textContent = "1";
+            }
+        }
+        syncCombinedQuantityOnItems(servicePickerCommitted, getServiceCombinedEnabled() ? serviceCombinedMax : 1);
+        syncCombinedQuantityOnItems(servicePickerDraft, getServiceCombinedEnabled() ? serviceCombinedMax : 1);
+        syncServiceQuantityUI();
+        syncServiceFormLabel();
+        syncServicePreview();
+        if (voucherServicePanel?.classList.contains("is-open")) {
+            renderServicePanelOptions();
+        }
+    });
+    voucherServiceMaxMinus?.addEventListener("click", () => {
+        serviceCombinedMax = Math.max(1, serviceCombinedMax - 1);
+        if (voucherServiceMaxValue) {
+            voucherServiceMaxValue.textContent = String(serviceCombinedMax);
+        }
+        syncCombinedQuantityOnItems(servicePickerCommitted, serviceCombinedMax);
+        syncCombinedQuantityOnItems(servicePickerDraft, serviceCombinedMax);
+        syncServiceFormLabel();
+        syncServicePreview();
+        if (voucherServicePanel?.classList.contains("is-open")) {
+            renderServicePanelOptions();
+        }
+    });
+    voucherServiceMaxPlus?.addEventListener("click", () => {
+        serviceCombinedMax += 1;
+        if (voucherServiceMaxValue) {
+            voucherServiceMaxValue.textContent = String(serviceCombinedMax);
+        }
+        syncCombinedQuantityOnItems(servicePickerCommitted, serviceCombinedMax);
+        syncCombinedQuantityOnItems(servicePickerDraft, serviceCombinedMax);
+        syncServiceFormLabel();
+        syncServicePreview();
+        if (voucherServicePanel?.classList.contains("is-open")) {
+            renderServicePanelOptions();
+        }
+    });
+    voucherServicePanelClose?.addEventListener("click", () => {
+        closeServicePanel(false);
+    });
+    voucherServicePanelCancel?.addEventListener("click", () => {
+        closeServicePanel(false);
+    });
+    voucherServicePanelApply?.addEventListener("click", () => {
+        closeServicePanel(true);
+    });
+    voucherServiceExpiryDropdown?.addEventListener("click", (event) => {
+        const target = event.target instanceof HTMLElement ? event.target.closest("[data-expiry-choice]") : null;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const label = target.dataset.expiryChoice || relativeExpiryChoices[3];
+        voucherOptionState.serviceExpiryIndex = Math.max(0, relativeExpiryChoices.indexOf(label));
+        setButtonLabel(voucherServiceExpiry, label);
+        renderServiceExpiryOptions();
+        syncServiceExpiryDropdown(false);
+        syncServiceExpiryPickerUI();
+        syncServicePreview();
+    });
+    voucherServicePanelSearch?.addEventListener("click", () => {
+        const query = normalize(voucherServicePanelSearch.value);
+        if (!query) {
+            syncServicePanelDropdown(!servicePanelDropdownOpen);
+        } else if (!servicePanelDropdownOpen) {
+            syncServicePanelDropdown(true);
+        }
+        renderServicePanelOptions();
+    });
+    voucherServicePanelSearch?.addEventListener("input", () => {
+        syncServicePanelDropdown(true);
+        renderServicePanelOptions();
+    });
+    voucherServicePanel?.addEventListener("click", (event) => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (!target) {
+            return;
+        }
+        if (
+            !target.closest(".voucher-service-panel__search") &&
+            !target.closest(".voucher-service-panel__list")
+        ) {
+            syncServicePanelDropdown(false);
+        }
+        const optionCard = target.closest(".js-voucher-service-option");
+        if (optionCard instanceof HTMLElement && !target.closest("[data-service-minus],[data-service-plus],[data-service-add],[data-service-remove]")) {
+            if (selectServiceOption(optionCard)) {
+                return;
+            }
+        }
+        const plusName = target.getAttribute("data-service-plus");
+        const minusName = target.getAttribute("data-service-minus");
+        const addName = target.getAttribute("data-service-add");
+        const removeName = target.getAttribute("data-service-remove");
+        if (plusName) {
+            adjustServiceDraftQty(plusName, 1);
+            return;
+        }
+        if (minusName) {
+            adjustServiceDraftQty(minusName, -1);
+            return;
+        }
+        if (addName) {
+            adjustServiceDraftQty(addName, 1);
+            return;
+        }
+        if (removeName) {
+            servicePickerDraft = servicePickerDraft.filter((item) => item.name !== removeName);
+            renderServicePanelOptions();
+        }
+    });
+    voucherLocationPanelClose?.addEventListener("click", () => {
+        closeLocationPanel(false);
+    });
+    voucherLocationPanelApply?.addEventListener("click", () => {
+        closeLocationPanel(true);
+    });
+    voucherLocationSearch?.addEventListener("input", () => {
+        const query = normalize(voucherLocationSearch.value);
+        voucherLocationOptions.forEach((option) => {
+            option.hidden = query && !normalize(option.dataset.locationName).includes(query);
+        });
+    });
+    voucherLocationPanel?.addEventListener("click", (event) => {
+        const target = event.target instanceof HTMLElement ? event.target.closest(".js-voucher-location-option") : null;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        serviceLocationDraft = target.dataset.locationName || locationChoices[0];
+        syncLocationOptions();
+    });
+    voucherServiceSave?.addEventListener("click", saveServiceVoucher);
+
+    voucherGiftName?.addEventListener("input", syncGiftPreview);
+    [voucherGiftValue, voucherGiftPrice].forEach((input) => {
+        input?.addEventListener("input", () => {
+            input.value = formatCurrencyTyping(input.value);
+            syncGiftPreview();
+        });
+        input?.addEventListener("blur", () => {
+            const digits = sanitizeDigitsOnly(input.value);
+            input.value = digits ? formatCurrencyInput(digits) : formatCurrencyInput(0);
+            syncGiftPreview();
+        });
+    });
+    voucherGiftExpiryMode?.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+            const mode = button.dataset.expiryMode || "relative";
+            voucherGiftExpiryMode.querySelectorAll("button").forEach((item) => {
+                item.classList.toggle("is-active", item === button);
+            });
+            if (mode === "specific") {
+                setButtonLabel(voucherGiftExpiry, voucherOptionState.giftSpecificDate ? formatDateLabel(voucherOptionState.giftSpecificDate) : "Pilih Hari");
+                syncGiftExpiryDropdown(false);
+            } else {
+                if (!relativeExpiryChoices[voucherOptionState.giftExpiryIndex]) {
+                    voucherOptionState.giftExpiryIndex = 3;
+                }
+                setButtonLabel(voucherGiftExpiry, relativeExpiryChoices[voucherOptionState.giftExpiryIndex]);
+                renderGiftExpiryOptions();
+            }
+            syncGiftExpiryPickerUI();
+            if (mode === "specific") ensureGiftExpiryPicker()?.open();
+            syncGiftPreview();
+        });
+    });
+    voucherGiftExpiry?.addEventListener("click", () => {
+        const isSpecific = voucherGiftExpiryMode?.querySelector("[data-expiry-mode='specific']")?.classList.contains("is-active");
+        if (isSpecific) {
+            ensureGiftExpiryPicker()?.open();
+        } else {
+            renderGiftExpiryOptions();
+            syncGiftExpiryDropdown(!giftExpiryDropdownOpen);
+        }
+    });
+    voucherGiftExpiryClear?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        voucherOptionState.giftSpecificDate = "";
+        giftExpiryPickerInstance?.clear();
+        setButtonLabel(voucherGiftExpiry, "Pilih Hari");
+        syncGiftExpiryPickerUI();
+        syncGiftExpiryDropdown(false);
+        syncGiftPreview();
+    });
+    voucherGiftExpiryDropdown?.addEventListener("click", (event) => {
+        const target = event.target instanceof HTMLElement ? event.target.closest("[data-gift-expiry-choice]") : null;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const label = target.dataset.giftExpiryChoice || relativeExpiryChoices[3];
+        voucherOptionState.giftExpiryIndex = Math.max(0, relativeExpiryChoices.indexOf(label));
+        setButtonLabel(voucherGiftExpiry, label);
+        renderGiftExpiryOptions();
+        syncGiftExpiryDropdown(false);
+        syncGiftExpiryPickerUI();
+        syncGiftPreview();
+    });
+    voucherGiftLocation?.addEventListener("click", () => {
+        openGiftLocationPanel();
+    });
+    voucherGiftMessage?.addEventListener("input", syncGiftPreview);
+    voucherGiftSave?.addEventListener("click", saveGiftVoucher);
+    voucherGiftLocationPanelClose?.addEventListener("click", () => {
+        closeGiftLocationPanel(false);
+    });
+    voucherGiftLocationPanelApply?.addEventListener("click", () => {
+        closeGiftLocationPanel(true);
+    });
+    voucherGiftLocationSearch?.addEventListener("input", () => {
+        const query = normalize(voucherGiftLocationSearch.value);
+        voucherGiftLocationOptions.forEach((option) => {
+            option.hidden = query && !normalize(option.dataset.locationName).includes(query);
+        });
+    });
+    voucherGiftLocationPanel?.addEventListener("click", (event) => {
+        const target = event.target instanceof HTMLElement ? event.target.closest(".js-voucher-gift-location-option") : null;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        giftLocationDraft = target.dataset.locationName || locationChoices[0];
+        syncGiftLocationOptions();
+    });
+
+    voucherServiceModalEl?.addEventListener("hidden.bs.modal", () => {
+        resetServiceEditor();
+    });
+    voucherGiftModalEl?.addEventListener("hidden.bs.modal", () => {
+        resetGiftEditor();
+    });
+
+    discountModalEl?.addEventListener("hidden.bs.modal", () => {
+        resetDiscountForm();
+    });
+
+    document.addEventListener("click", (event) => {
+        if (event.target instanceof HTMLElement && !event.target.closest(".js-voucher-service-expiry-picker")) {
+            syncServiceExpiryDropdown(false);
+        }
+        if (event.target instanceof HTMLElement && !event.target.closest(".js-voucher-gift-expiry-picker")) {
+            syncGiftExpiryDropdown(false);
+        }
+        if (
+            voucherFabMenu?.hidden ||
+            !(event.target instanceof HTMLElement) ||
+            event.target.closest(".js-vouchers-fab") ||
+            event.target.closest(".js-voucher-fab-menu")
+        ) {
+            return;
+        }
+        toggleVoucherFabMenu(false);
+    });
+
+    applyTab("voucher");
+    applyVoucherSearch();
+    applyDiscountSearch();
 }
 
 function initAnalyticsPage() {

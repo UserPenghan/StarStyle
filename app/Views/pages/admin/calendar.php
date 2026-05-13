@@ -53,6 +53,14 @@ $agendaServiceCategory = static function (array $service): string {
 };
 
 $selectedTime = $calendar['now'] ?: '09:00';
+$selectedEndTime = $selectedTime;
+try {
+    $selectedEndTime = (new DateTimeImmutable('2000-01-01 ' . $selectedTime))
+        ->modify('+30 minutes')
+        ->format('H:i');
+} catch (Throwable $exception) {
+    $selectedEndTime = '09:30';
+}
 $indicatorOffset = null;
 $calendarView = (string) ($_GET['view'] ?? 'week');
 $calendarView = in_array($calendarView, ['schedule', 'week', 'day'], true) ? $calendarView : 'week';
@@ -116,6 +124,302 @@ $agendaResources = [
     ['id' => 'resource-1', 'name' => 'Sumberdaya 1'],
     ['id' => 'resource-2', 'name' => 'Sumberdaya 2'],
     ['id' => 'resource-3', 'name' => 'Sumberdaya 3'],
+];
+$agendaDiscountRows = [
+    [
+        'id' => 1,
+        'name' => 'Diskon 20%',
+        'mode' => 'percent',
+        'amount' => 20,
+        'amount_label' => '20.00 %',
+        'max_discount' => 0,
+    ],
+    [
+        'id' => 2,
+        'name' => 'Diskon Mei Happy',
+        'mode' => 'amount',
+        'amount' => 20000,
+        'amount_label' => 'Rp 20.000,00',
+        'max_discount' => 0,
+    ],
+];
+$agendaOwnedVouchers = [
+    [
+        'id' => 'svc-bday',
+        'owner' => 'nalendra',
+        'type' => 'service',
+        'type_label' => 'Service Voucher',
+        'name' => 'Diskon Ulang Tahun',
+        'service_label' => 'Potong rambut pria -',
+        'service_names' => ['Potong rambut pria ()'],
+        'remaining' => 1,
+        'total' => 1,
+        'expiry_date' => '2026-06-09',
+        'location' => 'Star Salon',
+        'code' => 'SV-001',
+        'status' => 'active',
+    ],
+    [
+        'id' => 'gift-30k',
+        'owner' => 'nalendra',
+        'type' => 'gift',
+        'type_label' => 'voucher gift',
+        'name' => 'voucher gift',
+        'remaining_value' => 30000,
+        'expiry_date' => '2026-06-07',
+        'location' => 'Star Salon',
+        'code' => 'GV-001',
+        'status' => 'active',
+    ],
+    [
+        'id' => 'svc-promo',
+        'owner' => 'nalendra',
+        'type' => 'service',
+        'type_label' => 'Service Voucher',
+        'name' => 'Potong Rambut Promo',
+        'service_label' => 'Potong rambut pria -',
+        'service_names' => ['Potong rambut pria ()'],
+        'remaining' => 3,
+        'total' => 3,
+        'expiry_date' => '2026-06-07',
+        'location' => 'Star Salon',
+        'code' => 'SV-002',
+        'status' => 'active',
+    ],
+    [
+        'id' => 'gift-juni',
+        'owner' => 'nalendra',
+        'type' => 'gift',
+        'type_label' => 'Diskon Juni',
+        'name' => 'Diskon Juni',
+        'remaining_value' => 20000,
+        'expiry_date' => '2026-06-07',
+        'location' => 'Star Salon',
+        'code' => 'GV-002',
+        'status' => 'active',
+    ],
+    [
+        'id' => 'svc-mei',
+        'owner' => 'nalendra',
+        'type' => 'service',
+        'type_label' => 'Service Voucher',
+        'name' => 'Diskon Mei',
+        'service_label' => 'Cat rambut full -',
+        'service_names' => ['Cat rambut full ()'],
+        'remaining' => 0,
+        'total' => 1,
+        'expiry_date' => '2026-05-14',
+        'location' => 'Star Salon',
+        'code' => 'SV-003',
+        'status' => 'used',
+    ],
+    [
+        'id' => 'gift-other',
+        'owner' => 'Daniel',
+        'type' => 'gift',
+        'type_label' => 'voucher gift',
+        'name' => 'voucher gift',
+        'remaining_value' => 15000,
+        'expiry_date' => '2026-06-05',
+        'location' => 'Star Salon',
+        'code' => 'GV-009',
+        'status' => 'active',
+    ],
+];
+$agendaFindService = static function (string $name, array $fallback = []) use ($serviceNameMap, $normalizeCalendarServiceName): array {
+    $service = $serviceNameMap[$normalizeCalendarServiceName($name)] ?? null;
+    if (is_array($service)) {
+        return $service;
+    }
+
+    return $fallback;
+};
+$agendaSalesServices = [
+    array_merge([
+        'id' => 'sales-service-1',
+        'name' => 'Cat rambut full ()',
+        'price' => 300000,
+        'duration' => 180,
+        'category' => 'hair-coloring',
+        'category_label' => 'Hair Coloring',
+        'initials' => 'CC',
+        'gender' => null,
+        'kind' => 'service',
+    ], $agendaFindService('Cat rambut full ()')),
+    array_merge([
+        'id' => 'sales-service-2',
+        'name' => 'Creambath ()',
+        'price' => 100000,
+        'duration' => 120,
+        'category' => 'hair-treatment',
+        'category_label' => 'Hair Treatment',
+        'initials' => 'CC',
+        'gender' => null,
+        'kind' => 'service',
+    ], $agendaFindService('Creambath ()')),
+    array_merge([
+        'id' => 'sales-service-3',
+        'name' => 'Hair spa ()',
+        'price' => 120000,
+        'duration' => 120,
+        'category' => 'hair-treatment',
+        'category_label' => 'Hair Treatment',
+        'initials' => 'HH',
+        'gender' => null,
+        'kind' => 'service',
+    ], $agendaFindService('Hair spa ()')),
+    array_merge([
+        'id' => 'sales-service-4',
+        'name' => 'Potong rambut pria ()',
+        'price' => 50000,
+        'duration' => 60,
+        'category' => 'hair-cut',
+        'category_label' => 'Hair Cut',
+        'initials' => 'PP',
+        'gender' => 'male',
+        'kind' => 'service',
+    ], $agendaFindService('Potong rambut pria ()')),
+    array_merge([
+        'id' => 'sales-service-5',
+        'name' => 'Potong rambut Wanita ()',
+        'price' => 50000,
+        'duration' => 60,
+        'category' => 'hair-cut',
+        'category_label' => 'Hair Cut',
+        'initials' => 'PP',
+        'gender' => 'female',
+        'kind' => 'service',
+    ], $agendaFindService('Potong rambut Wanita ()')),
+];
+$agendaSalesPackages = [
+    [
+        'id' => 'package-1',
+        'kind' => 'package',
+        'name' => 'test paket',
+        'description' => 'Potong rambut pria -, Cat rambut full -',
+        'price' => 350000,
+        'duration' => 240,
+        'category' => 'hair-cut',
+        'category_label' => 'Hair Cut',
+        'initials' => ['CC', 'CC'],
+    ],
+];
+$agendaSalesProducts = [
+    [
+        'id' => 'product-1',
+        'kind' => 'product',
+        'name' => 'Hair Serum Wardah',
+        'variant' => 'Per Pump',
+        'brand' => 'Wardah',
+        'stock' => 8,
+        'price' => 2000,
+        'category' => 'all',
+        'category_label' => 'Semua',
+    ],
+    [
+        'id' => 'product-2',
+        'kind' => 'product',
+        'name' => 'Hair Serum Wardah',
+        'variant' => '500ml',
+        'brand' => 'Wardah',
+        'stock' => 10,
+        'price' => 30000,
+        'category' => 'all',
+        'category_label' => 'Semua',
+    ],
+];
+$agendaSalesVoucherCatalog = [
+    [
+        'id' => 'voucher-sales-1',
+        'kind' => 'voucher',
+        'voucher_kind' => 'service',
+        'name' => 'Potong Rambut Promo',
+        'subtitle' => 'Setelah 1 Bulan',
+        'price' => 50000,
+        'badge' => 'S',
+        'badge_color' => 'yellow',
+        'category' => 'service',
+    ],
+    [
+        'id' => 'voucher-sales-2',
+        'kind' => 'voucher',
+        'voucher_kind' => 'service',
+        'name' => 'Diskon Ulang Tahun',
+        'subtitle' => 'Setelah 1 Bulan',
+        'price' => 50000,
+        'badge' => 'S',
+        'badge_color' => 'yellow',
+        'category' => 'service',
+    ],
+    [
+        'id' => 'voucher-sales-3',
+        'kind' => 'voucher',
+        'voucher_kind' => 'gift',
+        'name' => 'Diskon Juni',
+        'subtitle' => 'Setelah 1 Bulan',
+        'price' => 20000,
+        'badge' => 'G',
+        'badge_color' => 'green',
+        'category' => 'gift',
+    ],
+    [
+        'id' => 'voucher-sales-4',
+        'kind' => 'voucher',
+        'voucher_kind' => 'service',
+        'name' => 'Diskon Mei',
+        'subtitle' => 'Setelah 1 Minggu',
+        'price' => 300000,
+        'badge' => 'S',
+        'badge_color' => 'yellow',
+        'category' => 'class',
+    ],
+];
+$agendaSalesPayables = [
+    [
+        'id' => 'payable-1',
+        'kind' => 'payable',
+        'customer' => 'Walk-In',
+        'date' => '09 Mei 2026',
+        'amount' => 50000,
+        'qty' => 1,
+        'badge' => 'NEW',
+    ],
+    [
+        'id' => 'payable-2',
+        'kind' => 'payable',
+        'customer' => 'nalendra',
+        'date' => '08 Mei 2026',
+        'amount' => 300000,
+        'qty' => 1,
+        'badge' => 'NEW',
+    ],
+    [
+        'id' => 'payable-3',
+        'kind' => 'payable',
+        'customer' => 'Walk-In',
+        'date' => '08 Mei 2026',
+        'amount' => 300000,
+        'qty' => 1,
+        'badge' => 'NEW',
+    ],
+    [
+        'id' => 'payable-4',
+        'kind' => 'payable',
+        'customer' => 'Walk-In',
+        'date' => '07 Mei 2026',
+        'amount' => 300000,
+        'qty' => 1,
+        'badge' => 'NEW',
+    ],
+];
+$agendaSalesPlans = [];
+$agendaSalesCatalogs = [
+    'services' => $agendaSalesServices,
+    'packages' => $agendaSalesPackages,
+    'products' => $agendaSalesProducts,
+    'vouchers' => $agendaSalesVoucherCatalog,
+    'plans' => $agendaSalesPlans,
+    'payable' => $agendaSalesPayables,
 ];
 $calendarFilterUrl = static function (string $filter) use ($calendarView, $calendar, $requestedStaffId): string {
     $query = '/calendar?view=' . $calendarView . '&date=' . $calendar['date'];
@@ -372,17 +676,19 @@ $calendarTimedItemsFor = static function (string $date, int $staffId) use (
         $staff = $staffMap[(int) $block['staff_id']] ?? ['name' => 'Staff'];
 
         $items[] = [
+            'id' => (int) ($block['id'] ?? 0),
+            'staff_id' => (int) ($block['staff_id'] ?? 0),
             'type' => 'blocked',
             'start_at' => $block['start_at'],
             'end_at' => $block['end_at'],
-            'title' => $block['title'] ?? 'Blokir Waktu',
-            'subtitle' => trim((string) ($block['description'] ?? 'Waktu diblokir')),
+            'title' => trim((string) ($block['description'] ?? '')) !== '' ? trim((string) $block['description']) : (string) ($block['title'] ?? 'Blokir Waktu'),
+            'subtitle' => '',
             'staff' => $staff['name'],
             'reference' => 'Blocked time',
             'status' => 'Blocked',
             'duration' => max(5, (int) (((new DateTimeImmutable((string) $block['end_at']))->getTimestamp() - (new DateTimeImmutable((string) $block['start_at']))->getTimestamp()) / 60)),
             'price' => 0,
-            'notes' => '',
+            'notes' => trim((string) ($block['description'] ?? '')),
         ];
     }
 
@@ -2066,6 +2372,306 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         display: none;
     }
 
+    .calendar-sales-topbar,
+    .calendar-sales-subfilters,
+    .calendar-sales-empty,
+    .calendar-sales-grid {
+        display: none;
+    }
+
+    .calendar-sales-topbar {
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .calendar-sales-subfilters {
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+    }
+
+    .calendar-sales-subfilters__list {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 20px;
+    }
+
+    .calendar-sales-subfilter {
+        border: 0;
+        background: transparent;
+        color: #5f6f86;
+        font-size: 18px;
+        font-weight: 600;
+        padding: 0;
+    }
+
+    .calendar-sales-subfilter.is-active {
+        color: #243041;
+    }
+
+    .calendar-sales-subfilters__toggle {
+        width: 56px;
+        height: 56px;
+        border: 0;
+        border-radius: 50%;
+        background: #f4f7fb;
+        color: #243041;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+    }
+
+    .calendar-sales-tab {
+        min-height: 52px;
+        padding: 0 26px;
+        border: 0;
+        border-radius: 999px;
+        background: #f5f7fa;
+        color: #111827;
+        font-size: 16px;
+        font-weight: 800;
+    }
+
+    .calendar-sales-tab.is-active {
+        background: #4f84ff;
+        color: #fff;
+    }
+
+    .calendar-sales-empty {
+        min-height: 180px;
+        padding: 24px;
+        border: 1px dashed #d6e2f3;
+        border-radius: 16px;
+        background: #fbfdff;
+        color: #7a8798;
+        font-size: 18px;
+        font-weight: 700;
+        place-items: center;
+        text-align: center;
+    }
+
+    .calendar-sales-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px 20px;
+        align-content: start;
+    }
+
+    .calendar-sales-card {
+        border: 1px solid #dbe4f1;
+        border-radius: 8px;
+        background: #fff;
+        padding: 0;
+        text-align: left;
+        overflow: hidden;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+
+    .calendar-sales-card:hover {
+        border-color: #8dc5ff;
+        box-shadow: 0 12px 24px rgba(79, 132, 255, 0.12);
+    }
+
+    .calendar-sales-card.is-clickable {
+        cursor: pointer;
+    }
+
+    .calendar-sales-card__service,
+    .calendar-sales-card__package,
+    .calendar-sales-card__product,
+    .calendar-sales-card__voucher,
+    .calendar-sales-card__payable {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        min-height: 76px;
+    }
+
+    .calendar-sales-card__media {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #e6edf5;
+        color: #243041;
+        font-size: 20px;
+        font-weight: 800;
+        position: relative;
+    }
+
+    .calendar-sales-card__media--voucher-yellow {
+        background: #ffef5f;
+    }
+
+    .calendar-sales-card__media--voucher-green {
+        background: #6fd0a0;
+        color: #fff;
+    }
+
+    .calendar-sales-card__package-dots {
+        display: flex;
+        gap: 6px;
+    }
+
+    .calendar-sales-card__package-dots span {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: #8a8f98;
+    }
+
+    .calendar-sales-card__product-icon {
+        font-size: 46px;
+        line-height: 1;
+        color: #3b3b3b;
+    }
+
+    .calendar-sales-card__body {
+        min-width: 0;
+        padding: 12px 14px;
+    }
+
+    .calendar-sales-card__body strong,
+    .calendar-sales-card__voucher-text strong,
+    .calendar-sales-card__payable-name {
+        display: block;
+        color: #111827;
+        font-size: 16px;
+        font-weight: 700;
+    }
+
+    .calendar-sales-card__meta,
+    .calendar-sales-card__body small,
+    .calendar-sales-card__voucher-text span,
+    .calendar-sales-card__payable-meta {
+        color: #6f7d91;
+        font-size: 14px;
+    }
+
+    .calendar-sales-card__meta {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 6px;
+    }
+
+    .calendar-sales-card__payable {
+        grid-template-columns: 92px minmax(0, 1fr) auto;
+        align-items: center;
+        min-height: 76px;
+        padding: 0 12px 0 0;
+    }
+
+    .calendar-sales-card__payable-avatar {
+        width: 52px;
+        height: 52px;
+        margin-left: 12px;
+        border-radius: 50%;
+        background: #f2f2f2;
+        border: 1px solid #e3e7ef;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        font-size: 28px;
+        color: #444;
+    }
+
+    .calendar-sales-card__payable-avatar::after {
+        content: attr(data-qty);
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        min-width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: #333;
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-size: 14px;
+        font-weight: 700;
+    }
+
+    .calendar-sales-card__payable-badge {
+        min-width: 88px;
+        padding: 8px 18px;
+        border: 1px solid #9fc3ff;
+        border-radius: 999px;
+        color: #4f84ff;
+        font-size: 18px;
+        font-weight: 700;
+        text-align: center;
+    }
+
+    .calendar-sales-card__voucher-text {
+        padding: 16px 14px;
+    }
+
+    .calendar-sales-card__no-result {
+        min-height: 340px;
+        border-radius: 8px;
+        background: #fafbfd;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: #6e798c;
+    }
+
+    .calendar-sales-card__no-result i {
+        display: block;
+        font-size: 54px;
+        margin-bottom: 10px;
+        color: #8e98a8;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-sales-topbar {
+        display: flex;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-sales-subfilters {
+        display: flex;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-sales-grid {
+        display: grid;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-review-toolbar,
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-note-panel,
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-review-addbar,
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-review-list,
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-total,
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-actions {
+        display: none;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-selected {
+        display: block;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-summary {
+        color: #4f84ff;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-footer-action {
+        background: #4f84ff;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-footer-action:disabled {
+        background: #e8edf5;
+        color: #a2adbd;
+    }
+
+    .calendar-agenda-modal.is-sales-mode .calendar-agenda-services,
+    .calendar-agenda-modal.is-sales-mode .js-calendar-service-filters {
+        display: none;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-sales-empty-tab .calendar-sales-empty {
+        display: grid;
+    }
+
     .calendar-agenda-modal.is-review-mode .calendar-agenda-picker-search,
     .calendar-agenda-modal.is-review-mode .calendar-agenda-chips,
     .calendar-agenda-modal.is-review-mode .calendar-agenda-services,
@@ -2557,6 +3163,267 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         background: #5b7ff3;
         color: #fff;
         font-weight: 800;
+    }
+
+    .calendar-block-modal .modal-dialog {
+        max-width: 560px;
+    }
+
+    .calendar-block-modal .modal-content {
+        border: 0;
+        border-radius: 18px;
+        box-shadow: 0 26px 64px rgba(24, 41, 76, 0.24);
+        overflow: visible;
+    }
+
+    .calendar-block-modal__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 22px 8px;
+        border: 0;
+    }
+
+    .calendar-block-modal__header h3 {
+        margin: 0;
+        color: #243041;
+        font-size: 24px;
+        font-weight: 800;
+    }
+
+    .calendar-block-modal__close {
+        width: 42px;
+        height: 42px;
+        border: 0;
+        border-radius: 50%;
+        background: transparent;
+        color: #2f3b4c;
+        font-size: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .calendar-block-modal__body {
+        padding: 4px 22px 22px;
+    }
+
+    .calendar-block-form {
+        position: relative;
+        display: grid;
+        gap: 14px;
+    }
+
+    .calendar-block-form__field label,
+    .calendar-block-form__times label {
+        display: block;
+        margin-bottom: 8px;
+        color: #3b4656;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .calendar-block-form__select,
+    .calendar-block-form__date,
+    .calendar-block-form__time-trigger,
+    .calendar-block-form textarea {
+        width: 100%;
+        min-height: 52px;
+        border: 0;
+        border-radius: 8px;
+        background: #f5f7fa;
+        color: #111827;
+        font-size: 16px;
+        line-height: 1.2;
+        box-shadow: inset 0 0 0 1px #edf2f8;
+    }
+
+    .calendar-block-form__select,
+    .calendar-block-form__date {
+        appearance: none;
+        -webkit-appearance: none;
+        padding: 0 42px 0 16px;
+    }
+
+    .calendar-block-form__select-wrap,
+    .calendar-block-form__date-wrap,
+    .calendar-block-form__time-wrap {
+        position: relative;
+    }
+
+    .calendar-block-form__select-wrap i,
+    .calendar-block-form__date-wrap i,
+    .calendar-block-form__time-trigger i {
+        color: #b3bdcb;
+    }
+
+    .calendar-block-form__select-wrap > i,
+    .calendar-block-form__date-wrap > i {
+        position: absolute;
+        top: 50%;
+        right: 16px;
+        transform: translateY(-50%);
+        font-size: 16px;
+        pointer-events: none;
+    }
+
+    .calendar-block-form__date-wrap > i:first-child {
+        left: 14px;
+        right: auto;
+    }
+
+    .calendar-block-form__date {
+        padding-left: 42px;
+        cursor: pointer;
+    }
+
+    .calendar-block-form__times {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .calendar-block-form__time-trigger {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 16px;
+        text-align: left;
+    }
+
+    .calendar-block-form__time-trigger span {
+        color: #111827;
+    }
+
+    .calendar-block-form__time-trigger.is-placeholder span {
+        color: #c2cad6;
+    }
+
+    .calendar-block-form__time-trigger.is-open {
+        box-shadow: inset 0 0 0 2px #4f84ff;
+        background: #ffffff;
+    }
+
+    .calendar-block-form textarea {
+        min-height: 92px;
+        padding: 14px 16px;
+        resize: vertical;
+        font-size: 15px;
+    }
+
+    .calendar-block-form__actions {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: end;
+        margin-top: 4px;
+    }
+
+    .calendar-block-form__delete,
+    .calendar-block-form__cancel,
+    .calendar-block-form__save {
+        min-height: 48px;
+        border: 0;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: 800;
+    }
+
+    .calendar-block-form__delete {
+        min-width: 108px;
+        background: #e04f5f;
+        color: #fff;
+    }
+
+    .calendar-block-form__cancel {
+        background: #fff;
+        color: #5a6678;
+        box-shadow: inset 0 0 0 1px #d6e1ef;
+    }
+
+    .calendar-block-form__save {
+        background: #4f84ff;
+        color: #fff;
+    }
+
+    .calendar-block-form__save:disabled {
+        background: #e7edf7;
+        color: #adb8c7;
+    }
+
+    .calendar-block-form__delete[hidden] {
+        display: none;
+    }
+
+    .calendar-block-time-popover {
+        position: absolute;
+        z-index: 40;
+        width: 320px;
+        padding: 8px 0 0;
+    }
+
+    .calendar-block-time-popover[hidden] {
+        display: none;
+    }
+
+    .calendar-block-time-popover__panel {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border: 1px solid #e0e8f3;
+        border-radius: 10px;
+        background: #fff;
+        box-shadow: 0 18px 44px rgba(27, 41, 66, 0.18);
+        overflow: hidden;
+    }
+
+    .calendar-block-time-popover__column {
+        max-height: 210px;
+        overflow: auto;
+        padding-bottom: 6px;
+    }
+
+    .calendar-block-time-popover__column + .calendar-block-time-popover__column {
+        border-left: 1px solid #eef3f8;
+    }
+
+    .calendar-block-time-popover__label,
+    .calendar-block-time-popover__option {
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #1f2937;
+        font-size: 14px;
+    }
+
+    .calendar-block-time-popover__label {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: #fff;
+        color: #afb8c6;
+        font-weight: 700;
+    }
+
+    .calendar-block-time-popover__option {
+        width: 100%;
+        border: 0;
+        background: transparent;
+    }
+
+    .calendar-block-time-popover__option.is-active {
+        background: #eef4ff;
+        color: #4f84ff;
+        font-weight: 800;
+    }
+
+    .calendar-event-card.is-blocked {
+        background: #3c3c3c;
+        border-color: #3c3c3c;
+    }
+
+    .calendar-event-card.is-blocked .calendar-event-card__service:empty {
+        display: none;
     }
 
     .calendar-agenda-time-services {
@@ -3088,6 +3955,10 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
     .calendar-agenda-modal.is-checkout-mode .calendar-agenda-review-list,
     .calendar-agenda-modal.is-checkout-mode .calendar-agenda-picker-search,
     .calendar-agenda-modal.is-checkout-mode .calendar-agenda-chips,
+    .calendar-agenda-modal.is-checkout-mode .calendar-sales-topbar,
+    .calendar-agenda-modal.is-checkout-mode .calendar-sales-subfilters,
+    .calendar-agenda-modal.is-checkout-mode .calendar-sales-grid,
+    .calendar-agenda-modal.is-checkout-mode .calendar-sales-empty,
     .calendar-agenda-modal.is-checkout-mode .calendar-agenda-services,
     .calendar-agenda-modal.is-checkout-mode .calendar-agenda-selected,
     .calendar-agenda-modal.is-checkout-mode .calendar-agenda-total,
@@ -3122,6 +3993,35 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         max-height: 190px;
     }
 
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker .calendar-sales-topbar {
+        display: flex;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker .calendar-sales-subfilters {
+        display: flex;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker .calendar-sales-grid {
+        display: grid;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker .calendar-sales-empty {
+        display: none;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker.is-sales-empty-tab .calendar-sales-empty {
+        display: grid;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker .calendar-agenda-chips,
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker .calendar-agenda-services {
+        display: none;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode.is-checkout-item-picker .calendar-agenda-selected {
+        display: block;
+    }
+
     .calendar-agenda-modal.is-checkout-mode .calendar-agenda-left {
         gap: 18px;
         overflow-y: auto;
@@ -3153,6 +4053,39 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         gap: 22px;
         padding-bottom: 28px;
         overflow: visible;
+    }
+
+    .calendar-sales-cart-toolbar {
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+    }
+
+    .calendar-sales-cart-toolbar__date {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 56px;
+        padding: 0 18px;
+        border: 0;
+        border-radius: 8px;
+        background: #f5f7fa;
+        color: #111827;
+        font-size: 16px;
+        font-weight: 700;
+    }
+
+    .calendar-sales-cart-toolbar__date i {
+        color: #b7c0cf;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode .calendar-sales-cart-toolbar {
+        display: flex;
+    }
+
+    .calendar-agenda-modal.is-sales-mode.is-checkout-mode .calendar-agenda-checkout-left > .calendar-agenda-checkout-branch {
+        display: none;
     }
 
     .calendar-agenda-checkout-branch {
@@ -3694,7 +4627,7 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
 
     .calendar-agenda-invoice-body {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
         width: 100%;
         min-height: 0;
         flex: 1 1 auto;
@@ -3706,13 +4639,13 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         display: grid;
         place-items: center;
         min-height: 0;
-        padding: 28px;
+        padding: 20px 24px;
         background: #fff;
     }
 
     .calendar-agenda-invoice-receipt {
-        width: min(360px, 100%);
-        padding: 24px 20px 22px;
+        width: min(300px, 100%);
+        padding: 18px 16px 16px;
         background: #fff;
         box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
         color: #111827;
@@ -3720,8 +4653,8 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
     }
 
     .calendar-agenda-invoice-a5 {
-        width: min(820px, calc(100% - 80px));
-        padding: 18px 18px 16px;
+        width: min(680px, calc(100% - 96px));
+        padding: 14px 14px 12px;
         background: #fff;
         box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
         color: #111827;
@@ -3806,23 +4739,23 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
     .calendar-agenda-invoice-tools {
         position: absolute;
         right: 14px;
-        top: 48px;
+        top: 30px;
         display: grid;
-        gap: 16px;
+        gap: 12px;
         z-index: 5;
     }
 
     .calendar-agenda-invoice-tool {
         display: grid;
         place-items: center;
-        width: 48px;
-        height: 48px;
+        width: 42px;
+        height: 42px;
         border: 0;
         border-radius: 999px;
         background: #fff;
         color: #111827;
         box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
-        font-size: 22px;
+        font-size: 19px;
         font-weight: 800;
     }
 
@@ -3832,7 +4765,7 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
     }
 
     .calendar-agenda-invoice-tool.is-lower {
-        margin-top: 430px;
+        margin-top: 340px;
         color: #6b7280;
     }
 
@@ -3840,17 +4773,17 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         display: grid;
         justify-items: center;
         gap: 6px;
-        margin-bottom: 18px;
+        margin-bottom: 14px;
         text-align: center;
     }
 
     .calendar-agenda-invoice-store i {
         display: grid;
         place-items: center;
-        width: 58px;
-        height: 58px;
+        width: 48px;
+        height: 48px;
         background: #f6f6f6;
-        font-size: 30px;
+        font-size: 24px;
     }
 
     .calendar-agenda-invoice-store strong {
@@ -3864,7 +4797,7 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
     }
 
     .calendar-agenda-invoice-title {
-        margin: 16px 0 20px;
+        margin: 12px 0 16px;
         text-align: center;
         font-weight: 800;
     }
@@ -3896,8 +4829,8 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
     }
 
     .calendar-agenda-invoice-seller {
-        margin-top: 24px;
-        padding-top: 16px;
+        margin-top: 18px;
+        padding-top: 12px;
         border-top: 1px solid #e5e7eb;
         text-align: center;
     }
@@ -3913,7 +4846,7 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         overflow-x: hidden;
         overflow-y: auto;
         border-left: 1px solid #e6edf6;
-        padding: 24px 16px 24px 18px;
+        padding: 20px 16px 20px 18px;
     }
 
     .calendar-agenda-invoice-side * {
@@ -4039,6 +4972,11 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         color: #d99030;
         font-size: 14px;
         font-weight: 800;
+    }
+
+    .calendar-agenda-invoice-status.is-paid {
+        border-color: #86d4e6;
+        color: #86d4e6;
     }
 
     .calendar-agenda-invoice-meta {
@@ -4438,6 +5376,151 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         color: #b4bbc5;
     }
 
+    .calendar-agenda-voucher-search__scan {
+        width: 28px;
+        height: 28px;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: #333;
+        font-size: 22px;
+    }
+
+    .calendar-agenda-voucher-list {
+        display: grid;
+        gap: 16px;
+        margin-top: 18px;
+        padding-right: 4px;
+        overflow-y: auto;
+        max-height: calc(100vh - 180px);
+    }
+
+    .calendar-agenda-voucher-card {
+        position: relative;
+        display: grid;
+        gap: 14px;
+        padding: 18px 20px 16px;
+        border: 1px solid #edf1f7;
+        border-radius: 24px;
+        background: #ffffff;
+        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.12);
+        text-align: left;
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+
+    .calendar-agenda-voucher-card:hover {
+        transform: translateY(-1px);
+        border-color: #d8e4ff;
+        box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+    }
+
+    .calendar-agenda-voucher-card.is-disabled {
+        opacity: 0.5;
+        box-shadow: none;
+    }
+
+    .calendar-agenda-voucher-card.is-disabled::after {
+        content: "Habis digunakan";
+        position: absolute;
+        right: -42px;
+        bottom: 26px;
+        width: 220px;
+        padding: 8px 0;
+        background: rgba(223, 226, 232, 0.95);
+        color: #737987;
+        font-size: 18px;
+        text-align: center;
+        transform: rotate(39deg);
+    }
+
+    .calendar-agenda-voucher-card__head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        color: #3c3c3c;
+    }
+
+    .calendar-agenda-voucher-card__type,
+    .calendar-agenda-voucher-card__expiry {
+        font-size: 16px;
+        line-height: 1.2;
+    }
+
+    .calendar-agenda-voucher-card__body {
+        display: grid;
+        grid-template-columns: 52px minmax(0, 1fr);
+        gap: 16px;
+        align-items: center;
+    }
+
+    .calendar-agenda-voucher-ticket {
+        position: relative;
+        width: 52px;
+        height: 80px;
+        border-radius: 0;
+        display: grid;
+        place-items: center;
+        font-size: 24px;
+        font-weight: 800;
+        color: #111;
+        background: #ffec57;
+    }
+
+    .calendar-agenda-voucher-ticket--gift {
+        background: #6fd2a2;
+        color: #fff;
+    }
+
+    .calendar-agenda-voucher-ticket::before,
+    .calendar-agenda-voucher-ticket::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #fff;
+        transform: translateX(-50%);
+    }
+
+    .calendar-agenda-voucher-ticket::before {
+        top: -10px;
+    }
+
+    .calendar-agenda-voucher-ticket::after {
+        bottom: -10px;
+    }
+
+    .calendar-agenda-voucher-card__content {
+        min-width: 0;
+    }
+
+    .calendar-agenda-voucher-card__title {
+        margin: 0;
+        color: #e89a29;
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1.35;
+    }
+
+    .calendar-agenda-voucher-card__title--gift {
+        color: #4d9d79;
+    }
+
+    .calendar-agenda-voucher-card__value {
+        margin: 8px 0 0;
+        color: #111;
+        font-size: 22px;
+        font-weight: 800;
+        line-height: 1.25;
+    }
+
+    .calendar-agenda-voucher-card__footer {
+        color: #444;
+        font-size: 16px;
+    }
+
     .calendar-agenda-voucher-empty {
         display: grid;
         place-items: center;
@@ -4532,8 +5615,9 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         left: 50%;
         top: 50%;
         z-index: 1061;
-        width: min(500px, calc(100vw - 32px));
-        padding: 28px;
+        transform: translate(-50%, -50%);
+        width: min(420px, calc(100vw - 32px));
+        padding: 22px;
         border-radius: 8px;
         background: #fff;
         box-shadow: 0 20px 48px rgba(15, 23, 42, 0.22);
@@ -4548,6 +5632,12 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         color: #1f2937;
         font-size: 24px;
         font-weight: 800;
+    }
+
+    .calendar-agenda-item-dialog__subtitle {
+        margin-top: 6px;
+        color: #1f2937;
+        font-size: 16px;
     }
 
     .calendar-agenda-item-dialog__count {
@@ -4570,6 +5660,13 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         display: block;
         margin-bottom: 6px;
         font-size: 17px;
+    }
+
+    .calendar-agenda-item-dialog__meta {
+        display: block;
+        margin-bottom: 6px;
+        color: #6f7d91;
+        font-size: 15px;
     }
 
     .calendar-agenda-item-dialog__choice i {
@@ -4678,7 +5775,17 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         gap: 10px;
     }
 
+    .calendar-sales-topbar {
+        gap: 10px;
+    }
+
     .calendar-agenda-chip {
+        min-height: 44px;
+        padding: 0 22px;
+        font-size: 14px;
+    }
+
+    .calendar-sales-tab {
         min-height: 44px;
         padding: 0 22px;
         font-size: 14px;
@@ -5330,7 +6437,17 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         gap: 8px;
     }
 
+    .calendar-sales-topbar {
+        gap: 8px;
+    }
+
     .calendar-agenda-chip {
+        min-height: 38px;
+        padding: 0 18px;
+        font-size: 13px;
+    }
+
+    .calendar-sales-tab {
         min-height: 38px;
         padding: 0 18px;
         font-size: 13px;
@@ -5781,6 +6898,41 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
         font-size: 16px;
     }
 
+    .calendar-agenda-voucher-list {
+        gap: 14px;
+    }
+
+    .calendar-agenda-voucher-card {
+        padding: 16px;
+        border-radius: 20px;
+    }
+
+    .calendar-agenda-voucher-card__title {
+        font-size: 18px;
+    }
+
+    .calendar-agenda-voucher-card__value {
+        font-size: 16px;
+    }
+
+    .calendar-agenda-voucher-card__type,
+    .calendar-agenda-voucher-card__expiry,
+    .calendar-agenda-voucher-card__footer {
+        font-size: 13px;
+    }
+
+    .calendar-agenda-voucher-ticket {
+        width: 42px;
+        height: 68px;
+        font-size: 20px;
+    }
+
+    .calendar-agenda-voucher-card.is-disabled::after {
+        right: -54px;
+        width: 190px;
+        font-size: 15px;
+    }
+
     .calendar-agenda-voucher-empty {
         min-height: 120px;
         margin-top: 68px;
@@ -6022,6 +7174,8 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                                      tabindex="0"
                                      data-calendar-event="1"
                                      data-event-type="<?= e((string) $item['type']) ?>"
+                                     data-event-id="<?= e((string) ($item['id'] ?? 0)) ?>"
+                                     data-event-staff-id="<?= e((string) ($item['staff_id'] ?? 0)) ?>"
                                      data-event-title="<?= e((string) $item['title']) ?>"
                                      data-event-subtitle="<?= e((string) $item['subtitle']) ?>"
                                      data-event-staff="<?= e((string) $item['staff']) ?>"
@@ -6031,7 +7185,8 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                                      data-event-end="<?= e((string) $item['end_at']) ?>"
                                      data-event-date="<?= e($itemDate) ?>"
                                      data-event-duration="<?= e((string) ($item['duration'] ?? 60)) ?>"
-                                     data-event-price="<?= e((string) ($item['price'] ?? 0)) ?>">
+                                     data-event-price="<?= e((string) ($item['price'] ?? 0)) ?>"
+                                     data-event-notes="<?= e((string) ($item['notes'] ?? '')) ?>">
                                     <i class="bi <?= e($statusIcon) ?> calendar-event-card__status-icon" aria-hidden="true"></i>
                                     <div class="calendar-event-card__inner">
                                         <div class="calendar-event-card__time"><?= e($itemTime) ?></div>
@@ -6142,6 +7297,8 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                                          tabindex="0"
                                          data-calendar-event="1"
                                          data-event-type="<?= e((string) $item['type']) ?>"
+                                         data-event-id="<?= e((string) ($item['id'] ?? 0)) ?>"
+                                         data-event-staff-id="<?= e((string) ($item['staff_id'] ?? 0)) ?>"
                                          data-event-title="<?= e((string) $item['title']) ?>"
                                          data-event-subtitle="<?= e((string) $item['subtitle']) ?>"
                                          data-event-staff="<?= e((string) $item['staff']) ?>"
@@ -6151,7 +7308,8 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                                          data-event-end="<?= e((string) $item['end_at']) ?>"
                                          data-event-date="<?= e($itemDate) ?>"
                                          data-event-duration="<?= e((string) ($item['duration'] ?? 60)) ?>"
-                                         data-event-price="<?= e((string) ($item['price'] ?? 0)) ?>">
+                                         data-event-price="<?= e((string) ($item['price'] ?? 0)) ?>"
+                                         data-event-notes="<?= e((string) ($item['notes'] ?? '')) ?>">
                                         <i class="bi <?= e($statusIcon) ?> calendar-event-card__status-icon" aria-hidden="true"></i>
                                         <div class="calendar-event-card__inner">
                                             <div class="calendar-event-card__time"><?= e($itemTime) ?></div>
@@ -6189,13 +7347,21 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
 
     <div class="calendar-fab-wrapper">
         <div class="calendar-fab-menu" id="calendarFabMenu">
-            <a class="calendar-fab-menu__item d-flex align-items-center gap-2 text-decoration-none text-dark" href="<?= e(url('/sales')) ?>">
+            <button class="calendar-fab-menu__item d-flex align-items-center gap-2 w-100 border-0 bg-transparent text-start js-calendar-entry-trigger"
+                    type="button"
+                    data-entry-mode="sales"
+                    data-bs-toggle="modal"
+                    data-bs-target="#agendaModal">
                 <i class="bi bi-plus-lg"></i> <span>Penjualan</span>
-            </a>
+            </button>
             <button class="calendar-fab-menu__item border-0 bg-transparent text-start d-flex align-items-center gap-2 w-100" type="button" data-bs-toggle="modal" data-bs-target="#blockTimeModal">
                 <i class="bi bi-plus-lg"></i> <span>Blokir Waktu</span>
             </button>
-            <button class="calendar-fab-menu__item border-0 bg-transparent text-start d-flex align-items-center gap-2 w-100" type="button" data-bs-toggle="modal" data-bs-target="#agendaModal">
+            <button class="calendar-fab-menu__item border-0 bg-transparent text-start d-flex align-items-center gap-2 w-100 js-calendar-entry-trigger"
+                    type="button"
+                    data-entry-mode="agenda"
+                    data-bs-toggle="modal"
+                    data-bs-target="#agendaModal">
                 <i class="bi bi-plus-lg"></i> <span>Agenda</span>
             </button>
             <button class="calendar-fab-menu__item calendar-fab-menu__close border-0 text-start d-flex align-items-center gap-2 w-100 js-calendar-fab-close" type="button">
@@ -6282,6 +7448,10 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
               data-customers="<?= e(json_encode($customers, JSON_HEX_APOS | JSON_HEX_QUOT)) ?>"
               data-staff="<?= e(json_encode($calendar['staff'], JSON_HEX_APOS | JSON_HEX_QUOT)) ?>"
               data-resources="<?= e(json_encode($agendaResources, JSON_HEX_APOS | JSON_HEX_QUOT)) ?>"
+              data-discounts="<?= e(json_encode($agendaDiscountRows, JSON_HEX_APOS | JSON_HEX_QUOT)) ?>"
+              data-owned-vouchers="<?= e(json_encode($agendaOwnedVouchers, JSON_HEX_APOS | JSON_HEX_QUOT)) ?>"
+              data-sales-catalogs="<?= e(json_encode($agendaSalesCatalogs, JSON_HEX_APOS | JSON_HEX_QUOT)) ?>"
+              data-today="<?= e(date('Y-m-d')) ?>"
               data-sales-url="<?= e(url('/sales?tab=invoices')) ?>">
             <?= csrf_field() ?>
             <input class="js-agenda-customer-name" type="hidden" name="customer_name" value="Walk-In">
@@ -6349,12 +7519,26 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                         <i class="bi bi-search"></i>
                     </div>
 
-                    <div class="calendar-agenda-chips" aria-label="Kategori layanan">
+                    <div class="calendar-sales-topbar js-calendar-sales-topbar">
+                        <button class="calendar-sales-tab js-calendar-sales-tab" type="button" data-sales-catalog="payable">Akan Dibayar</button>
+                        <button class="calendar-sales-tab is-active js-calendar-sales-tab" type="button" data-sales-catalog="services">Services</button>
+                        <button class="calendar-sales-tab js-calendar-sales-tab" type="button" data-sales-catalog="packages">Packages</button>
+                        <button class="calendar-sales-tab js-calendar-sales-tab" type="button" data-sales-catalog="products">Products</button>
+                        <button class="calendar-sales-tab js-calendar-sales-tab" type="button" data-sales-catalog="vouchers">Vouchers</button>
+                        <button class="calendar-sales-tab js-calendar-sales-tab" type="button" data-sales-catalog="plans">Plans</button>
+                    </div>
+
+                    <div class="calendar-sales-subfilters js-calendar-sales-subfilters" hidden></div>
+
+                    <div class="calendar-agenda-chips js-calendar-service-filters" aria-label="Kategori layanan">
                         <button class="calendar-agenda-chip is-active js-agenda-filter" type="button" data-agenda-filter="all">Paket Layanan</button>
                         <button class="calendar-agenda-chip js-agenda-filter" type="button" data-agenda-filter="hair-cut">Hair Cut</button>
                         <button class="calendar-agenda-chip js-agenda-filter" type="button" data-agenda-filter="hair-treatment">Hair Treatment</button>
                         <button class="calendar-agenda-chip js-agenda-filter" type="button" data-agenda-filter="hair-coloring">Hair Coloring</button>
                     </div>
+
+                    <div class="calendar-sales-empty js-calendar-sales-empty">Belum ada item pada tab ini.</div>
+                    <div class="calendar-sales-grid js-calendar-sales-grid" hidden></div>
 
                     <div class="calendar-agenda-services">
                         <?php foreach ($services as $service): ?>
@@ -6397,6 +7581,12 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                     </div>
 
                     <div class="calendar-agenda-checkout-left js-agenda-checkout-left" hidden>
+                        <div class="calendar-sales-cart-toolbar js-calendar-sales-cart-toolbar" hidden>
+                            <div class="calendar-agenda-checkout-branch"><i class="bi bi-geo-alt-fill"></i><span class="js-agenda-checkout-branch">Star Salon</span></div>
+                            <button class="calendar-sales-cart-toolbar__date js-agenda-date-open-secondary" type="button">
+                                <i class="bi bi-calendar3"></i><span class="js-agenda-date-label-secondary"><?= e($selectedDate->format('d M Y')) ?></span>
+                            </button>
+                        </div>
                         <div class="calendar-agenda-checkout-branch"><i class="bi bi-geo-alt-fill"></i><span class="js-agenda-checkout-branch">Star Salon</span></div>
                         <button class="calendar-agenda-checkout-search js-checkout-item-picker-open" type="button">
                             <span>Cari item untuk di jual</span>
@@ -6410,7 +7600,7 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                             </div>
                             <div class="calendar-agenda-checkout-summary-row">
                                 <a href="#" class="js-agenda-checkout-discount">Tambah Diskon</a>
-                                <span></span>
+                                <span class="js-agenda-checkout-discount-total">Rp 0,00</span>
                             </div>
                             <div class="calendar-agenda-checkout-summary-row">
                                 <span>Pajak</span>
@@ -6529,10 +7719,13 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                                 </button>
                             </div>
                             <div class="calendar-agenda-voucher-search">
-                                <input type="search" placeholder="Masukkan kode voucher" autocomplete="off">
-                                <i class="bi bi-upc-scan"></i>
+                                <input class="js-agenda-voucher-search" type="search" placeholder="Masukkan kode voucher" autocomplete="off">
+                                <button class="calendar-agenda-voucher-search__scan" type="button" aria-label="Scan voucher">
+                                    <i class="bi bi-upc-scan"></i>
+                                </button>
                             </div>
-                            <div class="calendar-agenda-voucher-empty">
+                            <div class="calendar-agenda-voucher-list js-agenda-voucher-list"></div>
+                            <div class="calendar-agenda-voucher-empty js-agenda-voucher-empty">
                                 <i class="bi bi-file-earmark-x"></i>
                                 <strong>No Result</strong>
                             </div>
@@ -6637,8 +7830,8 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                     <div class="calendar-agenda-invoice-side js-agenda-invoice-side">
                         <h4 class="js-agenda-invoice-customer">Walk-In</h4>
                         <div class="calendar-agenda-invoice-info js-agenda-invoice-info-panel">
-                            <div class="calendar-agenda-invoice-status">UNPAID</div>
-                            <div class="calendar-agenda-invoice-meta">
+                            <div class="calendar-agenda-invoice-status js-agenda-invoice-status">UNPAID</div>
+                            <div class="calendar-agenda-invoice-meta js-agenda-invoice-meta">
                                 <div>Dibuat pada <?= e(date('d M Y H:i')) ?></div>
                                 <div>Tanggal jatuh tempo faktur <?= e(date('d M Y', strtotime($calendar['date']))) ?></div>
                                 <div>di Star Salon Oleh Rayhan Doni Pramana dari POINT OF SALE</div>
@@ -6648,7 +7841,7 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
                                 <a class="js-agenda-invoice-email" href="#"><i class="bi bi-envelope"></i>Email</a>
                                 <a class="js-agenda-invoice-whatsapp" href="#" target="_blank" rel="noopener"><i class="bi bi-whatsapp"></i>whatsapp</a>
                             </div>
-                            <div class="calendar-agenda-invoice-actions">
+                            <div class="calendar-agenda-invoice-actions js-agenda-invoice-actions">
                                 <div class="calendar-agenda-invoice-more-wrap">
                                     <button class="js-agenda-invoice-more-toggle" type="button" aria-expanded="false">
                                         Lainnya <i class="bi bi-caret-down-fill ms-1"></i>
@@ -6710,10 +7903,12 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
             <div class="calendar-agenda-tool-backdrop js-agenda-tool-backdrop" hidden></div>
             <div class="calendar-agenda-item-dialog js-agenda-item-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="agendaItemDialogTitle">
                 <h3 id="agendaItemDialogTitle" class="js-agenda-item-title">Layanan</h3>
+                <div class="calendar-agenda-item-dialog__subtitle js-agenda-item-subtitle" hidden></div>
                 <div class="calendar-agenda-item-dialog__count">1 pilihan</div>
                 <div class="calendar-agenda-item-dialog__choice">
                     <div>
-                        <strong class="js-agenda-item-duration">(1h)</strong>
+                        <strong class="js-agenda-item-choice-title">(1h)</strong>
+                        <span class="calendar-agenda-item-dialog__meta js-agenda-item-choice-meta" hidden></span>
                         <span class="js-agenda-item-price">Rp 0,00</span>
                     </div>
                     <i class="bi bi-record-circle"></i>
@@ -6890,49 +8085,88 @@ if ($isDayView && date('Y-m-d') !== $selectedDate->format('Y-m-d')) {
     </div>
 </div>
 
-<div class="modal fade" id="blockTimeModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-centered">
-        <div class="modal-content calendar-modal">
-            <div class="modal-header border-0">
-                <div>
-                    <div class="eyebrow mb-1">Block Time</div>
-                    <h3 class="panel-subtitle">Blokir waktu staff</h3>
-                </div>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+<div class="modal fade calendar-block-modal" id="blockTimeModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="calendar-block-modal__header">
+                <h3 class="js-calendar-block-title">Blokir Waktu</h3>
+                <button class="calendar-block-modal__close" type="button" data-bs-dismiss="modal" aria-label="Tutup">
+                    <i class="bi bi-x-lg"></i>
+                </button>
             </div>
-            <div class="modal-body">
-                <form method="post" action="<?= e(url('/calendar/blocks')) ?>" class="row g-3">
+            <div class="calendar-block-modal__body">
+                <form method="post" action="<?= e(url('/calendar/blocks')) ?>" class="calendar-block-form js-calendar-block-form">
                     <?= csrf_field() ?>
-                    <div class="col-md-6">
-                        <label class="form-label">Judul</label>
-                        <input class="form-control" type="text" name="title" value="Block time" placeholder="Contoh: Lunch break">
+                    <input type="hidden" name="title" value="Blokir Waktu">
+                    <input class="js-calendar-block-id" type="hidden" name="block_id" value="">
+                    <div class="calendar-block-form__field">
+                        <label>Lokasi</label>
+                        <div class="calendar-block-form__select-wrap">
+                            <select class="calendar-block-form__select" aria-label="Lokasi blokir waktu">
+                                <option>Star Salon</option>
+                            </select>
+                            <i class="bi bi-chevron-down"></i>
+                        </div>
                     </div>
-                    <div class="col-md-6">
-                        <label class="form-label">Staff</label>
-                        <select class="form-select js-calendar-staff-input" name="staff_id">
-                            <?php foreach ($calendar['staff'] as $staffMember): ?>
-                                <option value="<?= e((string) $staffMember['id']) ?>"><?= e($staffMember['name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                    <div class="calendar-block-form__field">
+                        <label>Staf</label>
+                        <div class="calendar-block-form__select-wrap">
+                            <select class="calendar-block-form__select js-calendar-staff-input js-calendar-block-staff" name="staff_id" data-default-value="<?= e((string) $activeStaff['id']) ?>" required>
+                                <option value="">Select</option>
+                                <?php foreach ($calendar['staff'] as $staffMember): ?>
+                                    <option value="<?= e((string) $staffMember['id']) ?>" <?= (int) $staffMember['id'] === (int) $activeStaff['id'] ? 'selected' : '' ?>><?= e($staffMember['name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <i class="bi bi-chevron-down"></i>
+                        </div>
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Tanggal</label>
-                        <input class="form-control js-datepicker js-calendar-date-input" type="text" name="date" value="<?= e($calendar['date']) ?>">
+                    <div class="calendar-block-form__field">
+                        <label>Tanggal Diblokir</label>
+                        <div class="calendar-block-form__date-wrap">
+                            <i class="bi bi-calendar3"></i>
+                            <input class="calendar-block-form__date js-datepicker js-calendar-date-input js-calendar-block-date" type="text" name="date" value="<?= e($calendar['date']) ?>" data-default-value="<?= e($calendar['date']) ?>" autocomplete="off" required>
+                        </div>
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Jam mulai</label>
-                        <input class="form-control js-calendar-time-input" type="text" name="start_time" value="<?= e($selectedTime) ?>">
+                    <div class="calendar-block-form__times">
+                        <div class="calendar-block-form__field">
+                            <label>Jam mulai</label>
+                            <div class="calendar-block-form__time-wrap">
+                                <button class="calendar-block-form__time-trigger js-calendar-block-time-trigger is-placeholder" type="button" data-block-time-target="start">
+                                    <i class="bi bi-clock"></i>
+                                    <span class="js-calendar-block-time-display" data-block-time-display="start">HH:mm</span>
+                                </button>
+                                <input class="js-calendar-time-input js-calendar-block-time-input" type="hidden" name="start_time" value="<?= e($selectedTime) ?>" data-default-value="<?= e($selectedTime) ?>" data-block-time-input="start">
+                            </div>
+                        </div>
+                        <div class="calendar-block-form__field">
+                            <label>Jam berakhir</label>
+                            <div class="calendar-block-form__time-wrap">
+                                <button class="calendar-block-form__time-trigger js-calendar-block-time-trigger is-placeholder" type="button" data-block-time-target="end">
+                                    <i class="bi bi-clock"></i>
+                                    <span class="js-calendar-block-time-display" data-block-time-display="end">HH:mm</span>
+                                </button>
+                                <input class="js-calendar-end-time-input js-calendar-block-time-input" type="hidden" name="end_time" value="<?= e($selectedEndTime) ?>" data-default-value="<?= e($selectedEndTime) ?>" data-block-time-input="end">
+                            </div>
+                        </div>
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Jam selesai</label>
-                        <input class="form-control js-calendar-end-time-input" type="text" name="end_time" value="09:30">
+                    <div class="calendar-block-form__field">
+                        <label>Deskripsi</label>
+                        <textarea name="description" class="js-calendar-block-description" placeholder="Tulis alasan blokir waktu" required></textarea>
                     </div>
-                    <div class="col-12">
-                        <label class="form-label">Deskripsi</label>
-                        <textarea class="form-control" name="description" rows="3" placeholder="Keterangan block time"></textarea>
+                    <div class="calendar-block-form__actions">
+                        <button class="calendar-block-form__delete js-calendar-block-delete" type="submit" formaction="<?= e(url('/calendar/blocks/delete')) ?>" formnovalidate hidden>Hapus</button>
+                        <button class="calendar-block-form__cancel" type="button" data-bs-dismiss="modal">Batal</button>
+                        <button class="calendar-block-form__save js-calendar-block-save" type="submit">Simpan</button>
                     </div>
-                    <div class="col-12">
-                        <button class="btn btn-dark rounded-pill px-4" type="submit">Simpan block time</button>
+                    <div class="calendar-block-time-popover js-calendar-block-time-popover" hidden>
+                        <div class="calendar-block-time-popover__panel">
+                            <div class="calendar-block-time-popover__column js-calendar-block-time-hours">
+                                <div class="calendar-block-time-popover__label">HH</div>
+                            </div>
+                            <div class="calendar-block-time-popover__column js-calendar-block-time-minutes">
+                                <div class="calendar-block-time-popover__label">mm</div>
+                            </div>
+                        </div>
                     </div>
                 </form>
             </div>

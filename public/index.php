@@ -30,6 +30,8 @@ $router->get('/account', [AdminController::class, 'account']);
 $router->get('/calendar', [AdminController::class, 'calendar']);
 $router->post('/calendar/bookings', [AdminController::class, 'createInternalBooking']);
 $router->post('/calendar/blocks', [AdminController::class, 'createBlock']);
+$router->post('/calendar/blocks/update', [AdminController::class, 'updateBlock']);
+$router->post('/calendar/blocks/delete', [AdminController::class, 'deleteBlock']);
 $router->get('/sales', [AdminController::class, 'sales']);
 $router->post('/sales/checkout', [AdminController::class, 'checkout']);
 $router->get('/customers', [AdminController::class, 'customers']);
@@ -50,5 +52,19 @@ $router->get('/api/vouchers/validate', [ApiController::class, 'validateVoucher']
 $router->get('/api/dashboard/kpis', [ApiController::class, 'dashboardKpis']);
 $router->post('/api/pos/calculate', [ApiController::class, 'posCalculate']);
 $router->get('/api/settings/staff-permissions', [ApiController::class, 'staffPermissions']);
+$router->post('/api/inventory/master/save', [ApiController::class, 'inventoryMasterSave']);
+$router->post('/api/inventory/master/delete', [ApiController::class, 'inventoryMasterDelete']);
+$router->post('/api/inventory/suppliers/save', [ApiController::class, 'inventorySupplierSave']);
+$router->post('/api/inventory/suppliers/delete', [ApiController::class, 'inventorySupplierDelete']);
+$router->post('/api/inventory/products/save', [ApiController::class, 'inventoryProductSave']);
+$router->get('/api/inventory/products/history', [ApiController::class, 'inventoryProductHistory']);
+$router->post('/api/inventory/products/adjust-stock', [ApiController::class, 'inventoryProductAdjustStock']);
+$router->post('/api/inventory/purchases/create', [ApiController::class, 'inventoryPurchaseCreate']);
+$router->post('/api/inventory/purchases/receive', [ApiController::class, 'inventoryPurchaseReceive']);
+$router->post('/api/inventory/purchases/cancel', [ApiController::class, 'inventoryPurchaseCancel']);
+$router->post('/api/inventory/opnames/save', [ApiController::class, 'inventoryOpnameSave']);
+$router->post('/api/inventory/opnames/recount', [ApiController::class, 'inventoryOpnameRecount']);
+$router->post('/api/inventory/opnames/cancel', [ApiController::class, 'inventoryOpnameCancel']);
+$router->post('/api/inventory/opnames/complete', [ApiController::class, 'inventoryOpnameComplete']);
 
 $router->dispatch($_SERVER['REQUEST_METHOD'], $_SERVER['REQUEST_URI']);

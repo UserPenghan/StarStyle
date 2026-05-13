@@ -1,0 +1,17 @@
+﻿
+FullName                                                                               
+--------                                                                               
+C:\Users\hi\Documents\New project\database\migrations\2026_05_03_inventory_workflow.sql
+C:\Users\hi\Documents\New project\database\migrations\2026_05_03_staff_schedule.sql    
+
+
+
+FullName                                                                                            
+--------                                                                                            
+C:\Users\hi\Documents\New project\database\recovery\2026_05_07_drop_inventory_tables_phpmyadmin.sql 
+C:\Users\hi\Documents\New project\database\recovery\2026_05_07_inventory_missing_tables.sql         
+C:\Users\hi\Documents\New project\database\recovery\2026_05_07_rebuild_inventory_only_phpmyadmin.sql
+C:\Users\hi\Documents\New project\database\recovery\2026_05_07_rebuild_starstyle.sql                
+C:\Users\hi\Documents\New project\database\recovery\2026_05_07_rebuild_starstyle_phpmyadmin.sql     
+
+

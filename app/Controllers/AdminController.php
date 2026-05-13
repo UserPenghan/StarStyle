@@ -56,6 +56,24 @@ final class AdminController extends BaseController
         $this->redirect('/calendar');
     }
 
+    public function updateBlock(): void
+    {
+        $this->authorize('calendar.block');
+        verify_csrf();
+        $result = $this->repo()->updateBlock($_POST, $this->internalUser());
+        flash($result['success'] ? 'success' : 'error', $result['message']);
+        $this->redirect('/calendar');
+    }
+
+    public function deleteBlock(): void
+    {
+        $this->authorize('calendar.block');
+        verify_csrf();
+        $result = $this->repo()->deleteBlock($_POST, $this->internalUser());
+        flash($result['success'] ? 'success' : 'error', $result['message']);
+        $this->redirect('/calendar');
+    }
+
     public function sales(): void
     {
         $this->authorize('sales.view');
@@ -98,9 +116,7 @@ final class AdminController extends BaseController
     public function inventory(): void
     {
         $this->authorize('inventory.view');
-        $this->internalPage('pages/admin/inventory', 'Inventori', [
-            'products' => $this->repo()->getProducts(),
-        ]);
+        $this->internalPage('pages/admin/inventory', 'Inventori', $this->repo()->inventoryPayload());
     }
 
     public function vouchers(): void
