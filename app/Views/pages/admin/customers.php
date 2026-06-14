@@ -111,6 +111,10 @@ foreach ($customers as $customer) {
                                     data-customer-status="<?= e((string) ($customer['status'] ?? 'Aktif')) ?>"
                                     data-customer-notes="<?= e((string) ($customer['notes'] ?? '')) ?>"
                                     data-customer-address="<?= e((string) ($customer['address'] ?? '')) ?>"
+                                    data-customer-family-card-number="<?= e((string) ($customer['family_card_number'] ?? '')) ?>"
+                                    data-customer-passport-number="<?= e((string) ($customer['passport_number'] ?? '')) ?>"
+                                    data-customer-notify-via="<?= e((string) ($customer['notify_via'] ?? 'off')) ?>"
+                                    data-customer-marketing-opt-in="<?= !empty($customer['marketing_opt_in']) ? '1' : '0' ?>"
                                 ><?= e($customer['phone']) ?></td>
                                 <td><?= e($customer['email']) ?></td>
                                 <td><?= e($customer['member_id']) ?></td>
@@ -118,21 +122,24 @@ foreach ($customers as $customer) {
                                 <td><?= e(str_replace('T', ' ', substr($customer['last_visit'], 0, 19))) ?></td>
                                 <td><?= e($birthdate) ?></td>
                                 <td><?= e($tagsText) ?></td>
-                                <td><span class="customers-status-pill"><?= count($customer['tags']) ?> Pembatalan</span></td>
+                                <td><span class="customers-status-pill"><?= e((string) ($customer['status'] ?? 'Aktif')) ?></span></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
 
-                <div class="customers-table-footer">
-                    <div>Total <?= e((string) count($customers)) ?></div>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><span>20/page</span><i class="bi bi-chevron-down"></i></button>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                    <span class="customers-pagination-current">1</span>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                    <div>Go to</div>
-                    <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services sales-pagination--fixed" data-sales-pagination="customers">
+                    <div class="sales-pagination__meta">Total <span class="js-customers-total"><?= e((string) count($customers)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-customers-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-customers-page-size-menu hidden></div>
+                    </div>
+                    <button type="button" class="sales-pagination__nav" data-customers-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-customers-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-customers-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-customers-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-customers-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
         </section>
@@ -186,77 +193,87 @@ foreach ($customers as $customer) {
                         <div class="customer-upload-box">Drop file here or <span>click to upload</span></div>
 
                         <label>Nama</label>
-                        <input class="form-control customer-input-flat" type="text">
+                        <input class="form-control customer-input-flat js-customer-create-name" type="text">
 
                         <label>Jenis Kelamin</label>
-                        <div class="customer-segmented">
-                            <button class="is-active" type="button">Non-Aktifkan</button>
-                            <button type="button">Pria</button>
-                            <button type="button">Wanita</button>
+                        <div class="customer-segmented js-customer-create-gender">
+                            <button class="is-active" type="button" data-customer-create-gender="non-active">Non-Aktifkan</button>
+                            <button type="button" data-customer-create-gender="pria">Pria</button>
+                            <button type="button" data-customer-create-gender="wanita">Wanita</button>
                         </div>
 
                         <label>No. Telpon</label>
                         <div class="customer-phone-row">
                             <span class="customer-phone-flag"></span>
-                            <input class="form-control customer-input-flat" type="text" value="+62">
+                            <input class="form-control customer-input-flat js-customer-create-phone" type="text" value="+62">
                         </div>
 
                         <label>Email</label>
-                        <input class="form-control customer-input-flat" type="text">
+                        <input class="form-control customer-input-flat js-customer-create-email" type="text">
 
                         <label>Member ID</label>
                         <div class="customer-counter-field">
-                            <input class="form-control customer-input-flat" type="text">
-                            <span>0 / 16</span>
+                            <input class="form-control customer-input-flat js-customer-create-member-id" type="text">
+                            <span class="js-customer-create-member-counter">0 / 16</span>
                         </div>
                         <small>Max. 16 digits</small>
 
                         <label>Tanggal Lahir</label>
                         <div class="customer-birthday-row">
-                            <input class="form-control customer-input-flat" type="text" placeholder="YYYY">
+                            <input class="form-control customer-input-flat js-customer-create-birth-year" type="text" placeholder="YYYY">
                             <span>-</span>
-                            <input class="form-control customer-input-flat" type="text" placeholder="MMM">
+                            <input class="form-control customer-input-flat js-customer-create-birth-month" type="text" placeholder="MMM">
                             <span>-</span>
-                            <input class="form-control customer-input-flat" type="text" placeholder="DD">
+                            <input class="form-control customer-input-flat js-customer-create-birth-day" type="text" placeholder="DD">
                         </div>
                     </div>
 
                     <div class="customer-form-col">
                         <label>Nomor Kartu Keluarga</label>
                         <div class="customer-counter-field">
-                            <input class="form-control customer-input-flat" type="text">
-                            <span>0 / 16</span>
+                            <input class="form-control customer-input-flat js-customer-create-family-card" type="text">
+                            <span class="js-customer-create-family-counter">0 / 16</span>
                         </div>
 
                         <label>Paspor</label>
-                        <input class="form-control customer-input-flat" type="text">
+                        <input class="form-control customer-input-flat js-customer-create-passport" type="text">
 
                         <label>Catatan</label>
-                        <textarea class="form-control customer-input-flat" rows="4"></textarea>
+                        <textarea class="form-control customer-input-flat js-customer-create-notes" rows="4"></textarea>
 
                         <label>Tags</label>
-                        <button class="customer-picker" type="button"><span>No item</span><strong>Pilih</strong></button>
-
-                        <label>Kirim notifikasi melalui:</label>
-                        <div class="customer-segmented customer-segmented--two">
-                            <button class="is-active" type="button">Email</button>
-                            <button type="button">Non-Aktifkan</button>
+                        <div class="dropdown">
+                            <button class="customer-picker ss-dropdown-toggle js-customer-create-tag-picker" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <span class="js-customer-create-tag-picker-label">No item</span><strong>Pilih</strong>
+                            </button>
+                            <div class="dropdown-menu ss-dropdown-menu ss-dropdown-menu--wide">
+                                <?php foreach (array_keys($customerTags) as $tagName): ?>
+                                    <button class="dropdown-item js-customer-create-tag-option" type="button" data-customer-create-tag="<?= e($tagName) ?>"><?= e($tagName) ?></button>
+                                <?php endforeach; ?>
+                            </div>
                         </div>
 
-                        <label class="customer-toggle-row">
+                        <label>Kirim notifikasi melalui:</label>
+                        <div class="customer-segmented customer-segmented--two js-customer-create-notify">
+                            <button class="is-active" type="button" data-customer-create-notify="email">Email</button>
+                            <button type="button" data-customer-create-notify="off">Non-Aktifkan</button>
+                        </div>
+
+                        <label class="customer-toggle-row customer-toggle-row--interactive">
                             <span>Terima notifikasi marketing:</span>
-                            <span class="sales-switch__track"></span>
+                            <input class="customer-marketing-toggle js-customer-create-marketing-toggle" type="checkbox">
+                            <span class="customer-toggle-track"></span>
                         </label>
 
                         <h3>Alamat pelanggan</h3>
                         <label>Alamat</label>
-                        <textarea class="form-control customer-input-flat" rows="6"></textarea>
+                        <textarea class="form-control customer-input-flat js-customer-create-address" rows="6"></textarea>
                     </div>
                 </div>
             </div>
             <div class="customer-modal__footer">
                 <button type="button" class="customer-footer-btn" data-bs-dismiss="modal">Batal</button>
-                <button type="button" class="customer-footer-btn customer-footer-btn--disabled">Simpan</button>
+                <button type="button" class="customer-footer-btn customer-footer-btn--primary js-customer-create-save">Simpan</button>
             </div>
         </div>
     </div>

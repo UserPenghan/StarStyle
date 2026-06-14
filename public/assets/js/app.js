@@ -16,6 +16,11 @@ document.addEventListener("DOMContentLoaded", () => {
     safeInit("charts", initCharts);
     safeInit("date-pickers", initDatePickers);
     safeInit("booking-availability", initBookingAvailability);
+    safeInit("booking-picker", initBookingPickerInteractions);
+    safeInit("booking-time", initBookingTimeInteractions);
+    safeInit("booking-summary", initBookingSummaryInteractions);
+    safeInit("booking-confirmation", initBookingConfirmationInteractions);
+    safeInit("booking-payment", initBookingPaymentInteractions);
     safeInit("calendar-interactions", initCalendarInteractions);
     safeInit("calendar-block-time-modal", initCalendarBlockTimeModal);
     safeInit("calendar-event-viewer", initCalendarEventViewer);
@@ -30,6 +35,7 @@ document.addEventListener("DOMContentLoaded", () => {
     safeInit("reviews-page", initReviewsPage);
     safeInit("pos", initPOS);
     safeInit("permission-loader", initPermissionLoader);
+    safeInit("business-settings-page", initBusinessSettingsPage);
 });
 
 function initCharts() {
@@ -40,6 +46,8 @@ function initCharts() {
         }
 
         const isReferenceChart = canvas.classList.contains("js-dashboard-reference-chart");
+        const isCartesianChart = ["line", "bar"].includes(canvas.dataset.chartType || "line");
+        const isSalesDonutChart = canvas.classList.contains("sales-donut-chart");
 
         new Chart(canvas, {
             type: canvas.dataset.chartType || "line",
@@ -47,22 +55,25 @@ function initCharts() {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                cutout: isSalesDonutChart ? "0%" : undefined,
                 plugins: {
                     legend: {
                         position: "top",
                         labels: {
                             usePointStyle: isReferenceChart,
-                            boxWidth: isReferenceChart ? 8 : 40,
-                            boxHeight: isReferenceChart ? 8 : 12,
+                            boxWidth: isSalesDonutChart ? 28 : (isReferenceChart ? 8 : 40),
+                            boxHeight: isSalesDonutChart ? 14 : (isReferenceChart ? 8 : 12),
+                            borderRadius: isSalesDonutChart ? 999 : 0,
                             color: "#4d5f79",
-                            padding: isReferenceChart ? 22 : 12,
+                            padding: isSalesDonutChart ? 18 : (isReferenceChart ? 22 : 12),
                             font: {
-                                size: isReferenceChart ? 12 : 11,
+                                size: isSalesDonutChart ? 13 : (isReferenceChart ? 12 : 11),
+                                weight: isSalesDonutChart ? "600" : "400",
                             },
                         },
                     },
                 },
-                scales: canvas.dataset.chartType === "line" ? {
+                scales: isCartesianChart ? {
                     y: {
                         beginAtZero: true,
                         ticks: {
@@ -201,6 +212,11 @@ function markFlatpickrWeek(instance, date, className) {
 
 function initBookingAvailability() {
     document.querySelectorAll(".js-booking-form").forEach((form) => {
+        if (form.classList.contains("js-booking-experience")) {
+            initBookingExperienceForm(form);
+            return;
+        }
+
         const trigger = form.querySelector(".js-load-slots");
         if (!trigger) {
             return;
@@ -243,6 +259,1069 @@ function initBookingAvailability() {
     });
 }
 
+function initBookingExperienceForm(form) {
+    const dateRail = form.querySelector(".js-booking-date-rail");
+    const dateInput = form.querySelector(".js-booking-date-input");
+    const dateLabel = form.querySelector(".js-booking-date-label");
+    const dateShiftButton = form.querySelector(".js-booking-date-shift");
+    const serviceButtons = Array.from(form.querySelectorAll(".js-booking-service"));
+    const serviceInputsHost = form.querySelector(".js-booking-service-inputs");
+    const staffButtons = Array.from(form.querySelectorAll(".js-booking-staff"));
+    const staffInput = form.querySelector(".js-booking-staff-input");
+    const staffHelper = form.querySelector(".js-booking-staff-helper");
+    const slotTrigger = form.querySelector(".js-load-slots");
+    const slotGrid = form.querySelector(".js-booking-slot-grid");
+    const timeInput = form.querySelector(".js-booking-time-input");
+    const summaryServices = form.querySelector(".js-booking-summary-services");
+    const summaryDate = form.querySelector(".js-booking-summary-date");
+    const groupToggles = Array.from(form.querySelectorAll(".js-booking-group-toggle"));
+    const navButtons = Array.from(form.querySelectorAll("[data-booking-nav-target]"));
+    const navPanels = Array.from(form.querySelectorAll("[data-booking-nav-panel]"));
+    const maxDays = Number(form.dataset.maxDays || 30);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (!dateRail || !dateInput || !dateLabel || !serviceInputsHost || !staffInput || !slotGrid || !timeInput) {
+        return;
+    }
+
+    const shortDayFormatter = new Intl.DateTimeFormat("id-ID", { weekday: "short" });
+    const shortMonthFormatter = new Intl.DateTimeFormat("id-ID", { month: "short" });
+    const fullDateFormatter = new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", year: "numeric" });
+    let windowStart = 0;
+    let selectedDate = parseLocalDate(dateInput.value) || new Date(today);
+    let selectedServiceIds = [];
+    let selectedStaffId = "";
+
+    function parseLocalDate(value) {
+        if (!value) {
+            return null;
+        }
+
+        const [year, month, day] = String(value).split("-").map(Number);
+        if (!year || !month || !day) {
+            return null;
+        }
+
+        const date = new Date(year, month - 1, day);
+        date.setHours(0, 0, 0, 0);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    function formatYmdLocal(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+    }
+
+    function addDays(baseDate, days) {
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() + days);
+        return date;
+    }
+
+    function normalizeShortDay(date) {
+        const raw = shortDayFormatter.format(date).replace(".", "");
+        return raw.charAt(0).toUpperCase() + raw.slice(1, 3).toLowerCase();
+    }
+
+    function updateDateLabel() {
+        const monthLabel = shortMonthFormatter.format(selectedDate);
+        const fullLabel = fullDateFormatter.format(selectedDate);
+        dateLabel.textContent = fullLabel.charAt(0).toUpperCase() + fullLabel.slice(1);
+        dateShiftButton?.setAttribute("title", `Tampilkan 7 hari berikutnya setelah ${monthLabel}`);
+        if (summaryDate) {
+            summaryDate.textContent = `Tanggal ${fullLabel}`;
+        }
+    }
+
+    function renderDateRail() {
+        dateRail.innerHTML = "";
+        const totalWindows = Math.max(1, Math.ceil(maxDays / 7));
+        const safeWindow = Math.min(windowStart, totalWindows - 1);
+        windowStart = safeWindow;
+
+        for (let index = 0; index < 8; index += 1) {
+            const offset = safeWindow * 7 + index;
+            if (offset >= maxDays) {
+                break;
+            }
+
+            const date = addDays(today, offset);
+            const iso = formatYmdLocal(date);
+            const button = document.createElement("button");
+            const isSelected = iso === formatYmdLocal(selectedDate);
+            button.type = "button";
+            button.className = `booking-date-pill${isSelected ? " is-active" : ""}${offset === 0 ? " is-current-day" : ""}`;
+            button.dataset.dateValue = iso;
+
+            const month = shortMonthFormatter.format(date);
+            const dayLabel = normalizeShortDay(date);
+            button.innerHTML = offset === 0
+                ? `<span class="booking-date-pill__top">Hari ini</span><strong>${String(date.getDate()).padStart(2, "0")}</strong>`
+                : `<span class="booking-date-pill__top">${month}</span><strong>${dayLabel}</strong><small>${String(date.getDate()).padStart(2, "0")}</small>`;
+
+            button.addEventListener("click", () => {
+                selectedDate = date;
+                dateInput.value = iso;
+                updateDateLabel();
+                renderDateRail();
+                requestSlots();
+            });
+
+            dateRail.appendChild(button);
+        }
+    }
+
+    function syncServiceInputs() {
+        serviceInputsHost.innerHTML = selectedServiceIds.map((serviceId) => `<input type="hidden" name="service_ids[]" value="${serviceId}">`).join("");
+    }
+
+    function updateServiceButtons() {
+        serviceButtons.forEach((button) => {
+            const active = selectedServiceIds.includes(String(button.dataset.serviceId || ""));
+            button.classList.toggle("is-selected", active);
+            const icon = button.querySelector(".booking-service-item__action i");
+            if (icon) {
+                icon.className = active ? "bi bi-check-lg" : "bi bi-plus-lg";
+            }
+        });
+
+        if (summaryServices) {
+            if (selectedServiceIds.length === 0) {
+                summaryServices.textContent = "Belum ada item dipilih";
+                return;
+            }
+
+            const selectedNames = serviceButtons
+                .filter((button) => selectedServiceIds.includes(String(button.dataset.serviceId || "")))
+                .map((button) => String(button.dataset.serviceName || "").trim())
+                .filter(Boolean);
+
+            if (selectedNames.length <= 2) {
+                summaryServices.textContent = selectedNames.join(", ");
+                return;
+            }
+
+            summaryServices.textContent = `${selectedNames.slice(0, 2).join(", ")} +${selectedNames.length - 2} lainnya`;
+        }
+    }
+
+    function activateNav(targetName) {
+        navButtons.forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.bookingNavTarget === targetName);
+        });
+    }
+
+    function focusPanel(targetName) {
+        const panel = navPanels.find((node) => node.dataset.bookingNavPanel === targetName);
+        if (!panel) {
+            return;
+        }
+
+        navPanels.forEach((node) => node.classList.remove("is-focused"));
+        panel.classList.add("is-focused");
+        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        window.setTimeout(() => panel.classList.remove("is-focused"), 1200);
+    }
+
+    function compatibleStaffIds() {
+        if (selectedServiceIds.length === 0) {
+            return [];
+        }
+
+        const selectedButtons = serviceButtons.filter((button) => selectedServiceIds.includes(String(button.dataset.serviceId || "")));
+        if (selectedButtons.length === 0) {
+            return [];
+        }
+
+        let matches = null;
+        selectedButtons.forEach((button) => {
+            const ids = String(button.dataset.serviceStaffIds || "")
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean);
+
+            matches = matches === null ? ids : matches.filter((value) => ids.includes(value));
+        });
+
+        return matches || [];
+    }
+
+    function updateStaffButtons() {
+        const allowedIds = compatibleStaffIds();
+        let visibleCount = 0;
+
+        staffButtons.forEach((button) => {
+            const staffId = String(button.dataset.staffId || "");
+            const isVisible = selectedServiceIds.length > 0 && allowedIds.includes(staffId);
+            button.hidden = !isVisible;
+            button.classList.toggle("is-selected", isVisible && staffId === selectedStaffId);
+            if (isVisible) {
+                visibleCount += 1;
+            }
+        });
+
+        if (!allowedIds.includes(selectedStaffId)) {
+            selectedStaffId = allowedIds[0] || "";
+            staffInput.value = selectedStaffId;
+            staffButtons.forEach((button) => {
+                button.classList.toggle("is-selected", String(button.dataset.staffId || "") === selectedStaffId && !button.hidden);
+            });
+        }
+
+        if (staffHelper) {
+            if (selectedServiceIds.length === 0) {
+                staffHelper.textContent = "Pilih item terlebih dulu, lalu staff yang sesuai akan muncul di sini.";
+            } else if (visibleCount === 0) {
+                staffHelper.textContent = "Belum ada staff yang cocok untuk kombinasi item ini.";
+            } else {
+                staffHelper.textContent = selectedStaffId
+                    ? "Staff sudah dipilih. Anda bisa ganti jika ingin."
+                    : "Pilih salah satu staff yang tersedia.";
+            }
+        }
+    }
+
+    function renderSlotState(message) {
+        slotGrid.innerHTML = `<div class="booking-empty-state">${message}</div>`;
+    }
+
+    function updateSelectedSlot(targetValue) {
+        timeInput.value = targetValue;
+        slotGrid.querySelectorAll(".booking-slot-pill").forEach((button) => {
+            button.classList.toggle("is-selected", button.dataset.slotValue === targetValue);
+        });
+    }
+
+    async function requestSlots() {
+        if (selectedServiceIds.length === 0) {
+            renderSlotState("Pilih item terlebih dulu untuk melihat slot yang tersedia.");
+            updateSelectedSlot("");
+            return;
+        }
+
+        if (!selectedStaffId) {
+            renderSlotState("Pilih staff terlebih dulu agar sistem bisa mengecek ketersediaan.");
+            updateSelectedSlot("");
+            return;
+        }
+
+        renderSlotState("Sedang mengecek slot tersedia...");
+
+        try {
+            const response = await fetch(`/api/bookings/availability?staff_id=${selectedStaffId}&date=${dateInput.value}&service_ids=${selectedServiceIds.join(",")}`);
+            const data = await response.json();
+            const availableSlots = Array.isArray(data.slots) ? data.slots.filter((slot) => slot.available) : [];
+
+            if (availableSlots.length === 0) {
+                renderSlotState("Belum ada slot kosong pada tanggal ini. Coba geser ke tanggal berikutnya.");
+                updateSelectedSlot("");
+                return;
+            }
+
+            slotGrid.innerHTML = "";
+            availableSlots.slice(0, 18).forEach((slot, index) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = `booking-slot-pill${index === 0 ? " is-selected" : ""}`;
+                button.dataset.slotValue = slot.time;
+                button.textContent = slot.time;
+                button.addEventListener("click", () => {
+                    updateSelectedSlot(slot.time);
+                });
+                slotGrid.appendChild(button);
+            });
+
+            updateSelectedSlot(availableSlots[0].time);
+        } catch (error) {
+            console.error("[booking-experience] availability", error);
+            renderSlotState("Slot tidak bisa dimuat saat ini. Coba beberapa saat lagi.");
+            updateSelectedSlot("");
+        }
+    }
+
+    groupToggles.forEach((toggle) => {
+        toggle.addEventListener("click", () => {
+            const group = toggle.closest("[data-booking-group]");
+            if (!group) {
+                return;
+            }
+
+            const nextState = !group.classList.contains("is-open");
+            group.classList.toggle("is-open", nextState);
+            toggle.setAttribute("aria-expanded", nextState ? "true" : "false");
+        });
+    });
+
+    navButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            const targetName = button.dataset.bookingNavTarget;
+            if (!targetName) {
+                return;
+            }
+
+            activateNav(targetName);
+            focusPanel(targetName);
+        });
+    });
+
+    serviceButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            const serviceId = String(button.dataset.serviceId || "");
+            if (!serviceId) {
+                return;
+            }
+
+            selectedServiceIds = selectedServiceIds.includes(serviceId)
+                ? selectedServiceIds.filter((value) => value !== serviceId)
+                : [...selectedServiceIds, serviceId];
+
+            syncServiceInputs();
+            updateServiceButtons();
+            updateStaffButtons();
+            requestSlots();
+        });
+    });
+
+    staffButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            if (button.hidden) {
+                return;
+            }
+
+            selectedStaffId = String(button.dataset.staffId || "");
+            staffInput.value = selectedStaffId;
+            staffButtons.forEach((item) => item.classList.toggle("is-selected", item === button));
+            requestSlots();
+        });
+    });
+
+    dateShiftButton?.addEventListener("click", () => {
+        const totalWindows = Math.max(1, Math.ceil(maxDays / 7));
+        windowStart = (windowStart + 1) % totalWindows;
+        renderDateRail();
+    });
+
+    slotTrigger?.addEventListener("click", () => {
+        requestSlots();
+    });
+
+    updateDateLabel();
+    syncServiceInputs();
+    updateServiceButtons();
+    updateStaffButtons();
+    renderDateRail();
+    renderSlotState("Pilih item dan staff untuk melihat slot yang tersedia.");
+    activateNav("services");
+}
+
+function initBookingPickerInteractions() {
+    document.querySelectorAll(".js-booking-picker").forEach((picker) => {
+        const dateToggle = picker.querySelector(".js-booking-picker-date-toggle");
+        const calendarInput = picker.querySelector(".js-booking-picker-calendar");
+        const categoryToggle = picker.querySelector(".js-booking-picker-category-toggle");
+        const categoryClose = picker.querySelector(".js-booking-picker-category-close");
+        const categoryPanel = picker.querySelector(".booking-picker-category-panel");
+        const groupToggle = picker.querySelector(".js-booking-picker-group-toggle");
+        const groupCard = picker.querySelector(".js-booking-picker-group");
+        const servicesList = picker.querySelector(".js-booking-picker-services");
+        const serviceCards = Array.from(picker.querySelectorAll(".js-booking-picker-service"));
+        const sheet = picker.querySelector(".booking-picker-selection-sheet");
+        const sheetClose = picker.querySelector(".js-booking-picker-sheet-close");
+        const sheetCancel = picker.querySelector(".js-booking-picker-sheet-cancel");
+        const sheetSubmit = picker.querySelector(".js-booking-picker-sheet-submit");
+        const sheetMinus = picker.querySelector(".js-booking-picker-sheet-minus");
+        const sheetPlus = picker.querySelector(".js-booking-picker-sheet-plus");
+        const sheetImage = picker.querySelector(".js-booking-picker-sheet-image");
+        const sheetTitle = picker.querySelector(".js-booking-picker-sheet-title");
+        const sheetDescription = picker.querySelector(".js-booking-picker-sheet-description");
+        const sheetCount = picker.querySelector(".js-booking-picker-sheet-count");
+        const sheetOptions = picker.querySelector(".js-booking-picker-sheet-options");
+        const sheetQty = picker.querySelector(".js-booking-picker-sheet-qty");
+        const bottomBar = picker.querySelector(".booking-picker-bottom-bar");
+        const bottomSummary = picker.querySelector(".booking-picker-bottom-bar__summary");
+        const bottomCount = picker.querySelector(".js-booking-picker-bottom-count");
+        const bottomTotal = picker.querySelector(".js-booking-picker-bottom-total");
+        const continueButton = picker.querySelector(".js-booking-picker-continue");
+        const submitForm = picker.querySelector(".js-booking-picker-submit-form");
+        const submitItemsInput = picker.querySelector(".js-booking-picker-submit-items");
+        const costPanel = picker.querySelector(".booking-picker-cost-panel");
+        const costDate = picker.querySelector(".js-booking-picker-cost-date");
+        const costItems = picker.querySelector(".js-booking-picker-cost-items");
+        const submitDateInput = submitForm?.querySelector("[name='date']");
+        const selectedServices = new Map();
+        let activeService = null;
+        let activeVariantIndex = 0;
+        let activeQty = 1;
+        let calendarInstance = null;
+        let costPanelOpen = true;
+
+        const setCategoryOpen = (isOpen) => {
+            if (!categoryToggle || !categoryPanel) {
+                return;
+            }
+
+            categoryPanel.hidden = !isOpen;
+            categoryToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+        };
+
+        categoryToggle?.addEventListener("click", () => {
+            setCategoryOpen(categoryPanel?.hidden ?? true);
+        });
+
+        categoryClose?.addEventListener("click", () => {
+            setCategoryOpen(false);
+        });
+
+        groupToggle?.addEventListener("click", () => {
+            if (!groupCard || !servicesList) {
+                return;
+            }
+
+            const nextCollapsed = !groupCard.classList.contains("is-collapsed");
+            groupCard.classList.toggle("is-collapsed", nextCollapsed);
+            servicesList.hidden = nextCollapsed;
+            groupToggle.setAttribute("aria-expanded", nextCollapsed ? "false" : "true");
+        });
+
+        document.addEventListener("click", (event) => {
+            const target = event.target;
+            if (!(target instanceof Element) || !categoryPanel || !categoryToggle) {
+                return;
+            }
+
+            if (categoryPanel.hidden) {
+                return;
+            }
+
+            if (target.closest(".booking-picker-category-panel") || target.closest(".js-booking-picker-category-toggle")) {
+                return;
+            }
+
+            setCategoryOpen(false);
+        });
+
+        const formatMoney = (value) => new Intl.NumberFormat("id-ID", {
+            style: "currency",
+            currency: "IDR",
+            maximumFractionDigits: 0,
+        }).format(value || 0).replace(/\s/g, "");
+
+        const updateBottomBar = () => {
+            if (!bottomBar || !bottomCount || !bottomTotal) {
+                return;
+            }
+
+            let totalItems = 0;
+            let totalPrice = 0;
+
+            selectedServices.forEach((item) => {
+                totalItems += Number(item.qty || 0);
+                totalPrice += (Number(item.price || 0) * Number(item.qty || 0));
+            });
+
+            bottomBar.hidden = totalItems === 0;
+            picker.classList.toggle("has-selection", totalItems > 0);
+            bottomCount.textContent = `${totalItems} item`;
+            bottomTotal.textContent = formatMoney(totalPrice);
+
+            if (costPanel) {
+                if (totalItems === 0) {
+                    costPanel.hidden = true;
+                    costPanelOpen = true;
+                    bottomSummary?.classList.remove("is-open");
+                } else {
+                    costPanel.hidden = !costPanelOpen;
+                    bottomSummary?.classList.toggle("is-open", costPanelOpen);
+                }
+            }
+        };
+
+        const serializeSelection = () => Array.from(selectedServices.entries()).map(([serviceId, item]) => ({
+            service_id: Number(serviceId || 0),
+            name: item.name || "Layanan",
+            price: Number(item.price || 0),
+            duration: Number(item.duration || 0),
+            qty: Number(item.qty || 1),
+            image: item.image || "",
+        }));
+
+        const updateCostPanel = () => {
+            if (!costPanel || !costDate || !costItems || !submitDateInput) {
+                return;
+            }
+
+            const selectedDate = submitDateInput.value || "";
+            if (selectedDate) {
+                const date = new Date(`${selectedDate}T00:00:00`);
+                costDate.textContent = new Intl.DateTimeFormat("id-ID", {
+                    weekday: "long",
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                }).format(date);
+            } else {
+                costDate.textContent = "";
+            }
+
+            const items = serializeSelection();
+            costItems.innerHTML = items.map((item, index) => `
+                <div class="booking-picker-cost-row">
+                    <div>
+                        <span class="booking-picker-cost-row__name">${item.name}</span>
+                        <span class="booking-picker-cost-row__meta">(${item.qty}) ${formatMoney(item.price)}</span>
+                    </div>
+                    <span class="booking-picker-cost-row__price">
+                        ${formatMoney(item.price * item.qty)}
+                        <button class="booking-picker-cost-row__remove" type="button" data-cost-remove-index="${index}" aria-label="Hapus item">&times;</button>
+                    </span>
+                </div>
+            `).join("");
+
+            costItems.querySelectorAll("[data-cost-remove-index]").forEach((button) => {
+                button.addEventListener("click", () => {
+                    const keys = Array.from(selectedServices.keys());
+                    const serviceId = keys[Number(button.getAttribute("data-cost-remove-index") || -1)];
+                    if (!serviceId) {
+                        return;
+                    }
+
+                    selectedServices.delete(serviceId);
+                    serviceCards.forEach((card) => {
+                        if (String(card.dataset.serviceId || "") === String(serviceId)) {
+                            renderServiceCardState(card);
+                        }
+                    });
+                    updateCostPanel();
+                    updateBottomBar();
+                });
+            });
+        };
+
+        const renderServiceCardState = (card) => {
+            const serviceId = String(card.dataset.serviceId || "");
+            const state = selectedServices.get(serviceId);
+            const actionButton = card.querySelector(".js-booking-picker-service-open");
+            const stepper = card.querySelector(".booking-picker-service__stepper");
+            const countLabel = card.querySelector(".js-booking-picker-stepper-count");
+            const title = card.querySelector(".booking-picker-service__copy strong");
+            const copy = card.querySelector(".booking-picker-service__copy small");
+            const baseName = String(card.dataset.serviceBaseName || "Layanan");
+
+            if (!state) {
+                card.classList.remove("is-selected");
+                if (actionButton) {
+                    actionButton.hidden = false;
+                }
+                if (stepper) {
+                    stepper.hidden = true;
+                }
+                if (title) {
+                    title.textContent = baseName;
+                }
+                return;
+            }
+
+            card.classList.add("is-selected");
+            if (actionButton) {
+                actionButton.hidden = true;
+            }
+            if (stepper) {
+                stepper.hidden = false;
+            }
+            if (countLabel) {
+                countLabel.textContent = String(state.qty);
+            }
+            if (title) {
+                title.textContent = state.name || baseName;
+            }
+            if (copy) {
+                copy.textContent = `${formatMoney(state.price)} • ${state.duration}min`;
+            }
+        };
+
+        const closeSheet = () => {
+            if (!sheet) {
+                return;
+            }
+            sheet.hidden = true;
+            activeService = null;
+            activeVariantIndex = 0;
+            activeQty = 1;
+        };
+
+        const renderSheetOptions = () => {
+            if (!sheetOptions || !activeService) {
+                return;
+            }
+
+            const variants = Array.isArray(activeService.variants) ? activeService.variants : [];
+            sheetOptions.innerHTML = variants.map((variant, index) => `
+                <button class="booking-picker-selection-sheet__option${index === activeVariantIndex ? " is-selected" : ""}" type="button" data-picker-variant-index="${index}">
+                    <span class="booking-picker-selection-sheet__option-thumb">${activeService.image ? `<img src="${activeService.image}" alt="${variant.name}">` : `<i class="bi bi-scissors"></i>`}</span>
+                    <span class="booking-picker-selection-sheet__option-copy">
+                        <strong>${variant.name}</strong>
+                        <small>${formatMoney(variant.price)} • ${variant.duration}min</small>
+                    </span>
+                    <span class="booking-picker-selection-sheet__option-radio" aria-hidden="true"></span>
+                </button>
+            `).join("");
+
+            sheetOptions.querySelectorAll("[data-picker-variant-index]").forEach((button) => {
+                button.addEventListener("click", () => {
+                    activeVariantIndex = Number(button.getAttribute("data-picker-variant-index") || 0);
+                    renderSheetOptions();
+                });
+            });
+        };
+
+        const openSheet = (card) => {
+            const payloadText = card.dataset.servicePayload || "";
+            if (!payloadText || !sheet || !sheetImage || !sheetTitle || !sheetDescription || !sheetCount || !sheetQty) {
+                return;
+            }
+
+            try {
+                activeService = JSON.parse(payloadText);
+            } catch (error) {
+                console.error("[booking-picker] invalid service payload", error);
+                return;
+            }
+
+            const selectedState = selectedServices.get(String(activeService.id || ""));
+            activeVariantIndex = selectedState ? Number(selectedState.variantIndex || 0) : 0;
+            activeQty = selectedState ? Number(selectedState.qty || 1) : 1;
+
+            if (activeService.image) {
+                sheetImage.src = activeService.image;
+                sheetImage.alt = activeService.name || "Layanan";
+            }
+            sheetTitle.textContent = activeService.name || "Layanan";
+            sheetDescription.textContent = activeService.description || "";
+            sheetCount.textContent = `${(activeService.variants || []).length} Pilihan`;
+            sheetQty.textContent = String(activeQty);
+            renderSheetOptions();
+            sheet.hidden = false;
+        };
+
+        const saveActiveService = () => {
+            if (!activeService) {
+                return;
+            }
+
+            const variants = Array.isArray(activeService.variants) ? activeService.variants : [];
+            const variant = variants[activeVariantIndex] || variants[0];
+            if (!variant) {
+                return;
+            }
+
+            selectedServices.set(String(activeService.id || ""), {
+                variantIndex: activeVariantIndex,
+                qty: activeQty,
+                price: Number(variant.price || 0),
+                duration: Number(variant.duration || 0),
+                name: variant.name || activeService.name || "Layanan",
+                image: activeService.image || "",
+            });
+
+            serviceCards.forEach((card) => {
+                if (String(card.dataset.serviceId || "") === String(activeService.id || "")) {
+                    renderServiceCardState(card);
+                }
+            });
+
+            updateCostPanel();
+            updateBottomBar();
+            closeSheet();
+        };
+
+        serviceCards.forEach((card) => {
+            card.querySelector(".js-booking-picker-service-open")?.addEventListener("click", () => {
+                openSheet(card);
+            });
+
+            card.querySelector(".js-booking-picker-stepper-minus")?.addEventListener("click", () => {
+                const serviceId = String(card.dataset.serviceId || "");
+                const current = selectedServices.get(serviceId);
+                if (!current) {
+                    return;
+                }
+                current.qty -= 1;
+                if (current.qty <= 0) {
+                    selectedServices.delete(serviceId);
+                } else {
+                    selectedServices.set(serviceId, current);
+                }
+                renderServiceCardState(card);
+                updateCostPanel();
+                updateBottomBar();
+            });
+
+            card.querySelector(".js-booking-picker-stepper-plus")?.addEventListener("click", () => {
+                const serviceId = String(card.dataset.serviceId || "");
+                const current = selectedServices.get(serviceId);
+                if (!current) {
+                    return;
+                }
+                current.qty += 1;
+                selectedServices.set(serviceId, current);
+                renderServiceCardState(card);
+                updateCostPanel();
+                updateBottomBar();
+            });
+        });
+
+        sheetClose?.addEventListener("click", closeSheet);
+        sheetCancel?.addEventListener("click", closeSheet);
+        sheet?.addEventListener("click", (event) => {
+            if (event.target === sheet) {
+                closeSheet();
+            }
+        });
+        sheetMinus?.addEventListener("click", () => {
+            activeQty = Math.max(1, activeQty - 1);
+            if (sheetQty) {
+                sheetQty.textContent = String(activeQty);
+            }
+        });
+        sheetPlus?.addEventListener("click", () => {
+            activeQty += 1;
+            if (sheetQty) {
+                sheetQty.textContent = String(activeQty);
+            }
+        });
+        sheetSubmit?.addEventListener("click", saveActiveService);
+        continueButton?.addEventListener("click", () => {
+            if (!submitForm || !submitItemsInput || selectedServices.size === 0) {
+                return;
+            }
+
+            submitItemsInput.value = JSON.stringify(serializeSelection());
+            submitForm.submit();
+        });
+        bottomSummary?.addEventListener("click", () => {
+            if (!costPanel || selectedServices.size === 0) {
+                return;
+            }
+
+            costPanelOpen = !costPanelOpen;
+            costPanel.hidden = !costPanelOpen;
+            bottomSummary.classList.toggle("is-open", costPanelOpen);
+        });
+
+        if (typeof flatpickr !== "undefined" && calendarInput && dateToggle) {
+            const formatCalendarFooterDate = (date) => {
+                if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+                    return "";
+                }
+
+                return new Intl.DateTimeFormat("en-GB", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                }).format(date);
+            };
+
+            const ensureCalendarFooter = (instance) => {
+                const calendar = instance.calendarContainer;
+                if (!calendar) {
+                    return;
+                }
+
+                let footer = calendar.querySelector(".booking-picker-calendar-popover__footer");
+                if (!footer) {
+                    footer = document.createElement("div");
+                    footer.className = "booking-picker-calendar-popover__footer";
+                    footer.innerHTML = `
+                        <span class="booking-picker-calendar-popover__value"></span>
+                        <button class="booking-picker-calendar-popover__today" type="button">Hari ini</button>
+                    `;
+                    calendar.appendChild(footer);
+
+                    footer.querySelector(".booking-picker-calendar-popover__today")?.addEventListener("click", () => {
+                        const today = new Date();
+                        instance.setDate(today, true);
+                    });
+                }
+
+                const value = footer.querySelector(".booking-picker-calendar-popover__value");
+                if (value) {
+                    const selected = instance.selectedDates?.[0] || new Date(calendarInput.value);
+                    value.textContent = formatCalendarFooterDate(selected);
+                }
+            };
+
+            calendarInstance = flatpickr(calendarInput, {
+                dateFormat: "Y-m-d",
+                defaultDate: calendarInput.value || undefined,
+                clickOpens: false,
+                position: "below right",
+                positionElement: dateToggle,
+                prevArrow: "&lsaquo;",
+                nextArrow: "&rsaquo;",
+                onReady: (_selectedDates, _dateStr, instance) => {
+                    instance.calendarContainer.classList.add("booking-picker-calendar-popover");
+                    ensureCalendarFooter(instance);
+                },
+                onOpen: () => {
+                    dateToggle.classList.add("is-open");
+                    dateToggle.setAttribute("aria-expanded", "true");
+                },
+                onClose: () => {
+                    dateToggle.classList.remove("is-open");
+                    dateToggle.setAttribute("aria-expanded", "false");
+                },
+                onChange: (selectedDates, dateStr, instance) => {
+                    ensureCalendarFooter(instance);
+                    if (!dateStr) {
+                        return;
+                    }
+
+                    const groupId = calendarInput.dataset.groupId || "";
+                    const params = new URLSearchParams();
+                    params.set("date", dateStr);
+                    if (groupId) {
+                        params.set("group", groupId);
+                    }
+                    window.location.href = `/booking/services?${params.toString()}`;
+                },
+            });
+
+            dateToggle.addEventListener("click", () => {
+                if (!calendarInstance) {
+                    return;
+                }
+
+                if (calendarInstance.isOpen) {
+                    calendarInstance.close();
+                    return;
+                }
+
+                calendarInstance.open();
+            });
+        }
+    });
+}
+
+function initBookingTimeInteractions() {
+    const selectedInput = document.querySelector(".js-booking-time-selected-input");
+
+    document.querySelectorAll(".booking-time-slot-grid").forEach((grid) => {
+        grid.querySelectorAll(".booking-time-slot").forEach((button) => {
+            button.addEventListener("click", () => {
+                if (button.classList.contains("is-muted")) {
+                    return;
+                }
+
+                document.querySelectorAll(".booking-time-slot.is-selected").forEach((selected) => {
+                    selected.classList.remove("is-selected");
+                });
+                button.classList.add("is-selected");
+                if (selectedInput) {
+                    selectedInput.value = button.dataset.timeSlot || button.textContent.trim();
+                }
+            });
+        });
+    });
+}
+
+function initBookingSummaryInteractions() {
+    const card = document.querySelector(".booking-summary-card");
+    if (!card) {
+        return;
+    }
+
+    const staffPicker = card.querySelector(".booking-summary-card__staff-picker");
+    const timePicker = card.querySelector(".booking-summary-card__time-picker");
+    const staffLabel = card.querySelector(".js-booking-summary-staff-label");
+    const timeLabel = card.querySelector(".js-booking-summary-time-label");
+    const selectedStaffInput = document.querySelector(".js-booking-summary-selected-staff-input");
+    const selectedTimeInput = document.querySelector(".js-booking-summary-selected-time-input");
+    const staffToggles = Array.from(card.querySelectorAll(".js-booking-summary-staff-toggle"));
+    const timeToggles = Array.from(card.querySelectorAll(".js-booking-summary-time-toggle"));
+    const staffOptions = Array.from(card.querySelectorAll(".booking-summary-card__staff-option"));
+    const timeOptions = Array.from(card.querySelectorAll(".booking-summary-card__time-option"));
+
+    const setExpandedState = (buttons, expanded) => {
+        buttons.forEach((button) => {
+            button.setAttribute("aria-expanded", expanded ? "true" : "false");
+        });
+    };
+
+    staffToggles.forEach((toggle) => {
+        toggle.addEventListener("click", () => {
+            const shouldOpen = Boolean(staffPicker?.hidden);
+            if (staffPicker) {
+                staffPicker.hidden = !shouldOpen;
+            }
+            if (timePicker) {
+                timePicker.hidden = true;
+            }
+            setExpandedState(staffToggles, shouldOpen);
+            setExpandedState(timeToggles, false);
+        });
+    });
+
+    timeToggles.forEach((toggle) => {
+        toggle.addEventListener("click", () => {
+            const shouldOpen = Boolean(timePicker?.hidden);
+            if (timePicker) {
+                timePicker.hidden = !shouldOpen;
+            }
+            if (staffPicker) {
+                staffPicker.hidden = true;
+            }
+            setExpandedState(timeToggles, shouldOpen);
+            setExpandedState(staffToggles, false);
+        });
+    });
+
+    staffOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            staffOptions.forEach((button) => button.classList.remove("is-selected"));
+            option.classList.add("is-selected");
+            if (staffLabel) {
+                staffLabel.textContent = option.dataset.staffLabel || "Staff";
+            }
+            if (selectedStaffInput) {
+                selectedStaffInput.value = option.dataset.staffId || "0";
+            }
+            if (staffPicker) {
+                staffPicker.hidden = true;
+            }
+            setExpandedState(staffToggles, false);
+        });
+    });
+
+    timeOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            timeOptions.forEach((button) => button.classList.remove("is-selected"));
+            option.classList.add("is-selected");
+            if (timeLabel) {
+                timeLabel.textContent = option.dataset.timeLabel || "";
+            }
+            if (selectedTimeInput) {
+                selectedTimeInput.value = option.dataset.timeStart || "";
+            }
+            if (timePicker) {
+                timePicker.hidden = true;
+            }
+            setExpandedState(timeToggles, false);
+        });
+    });
+}
+
+function initBookingConfirmationInteractions() {
+    const modal = document.querySelector(".booking-cancel-modal");
+    if (!modal) {
+        return;
+    }
+
+    const openButton = document.querySelector(".js-booking-cancel-open");
+    const closeButtons = Array.from(document.querySelectorAll(".js-booking-cancel-close"));
+    const reasons = Array.from(modal.querySelectorAll(".booking-cancel-modal__reason"));
+
+    openButton?.addEventListener("click", () => {
+        modal.hidden = false;
+    });
+
+    closeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            modal.hidden = true;
+        });
+    });
+
+    reasons.forEach((button) => {
+        button.addEventListener("click", () => {
+            reasons.forEach((item) => item.classList.remove("is-selected"));
+            button.classList.add("is-selected");
+        });
+    });
+}
+
+function initBookingPaymentInteractions() {
+    const form = document.querySelector(".js-booking-payment-form");
+    if (form) {
+        const methodInput = form.querySelector(".js-booking-payment-method-input");
+        const submitButton = form.querySelector(".js-booking-payment-submit");
+        const methods = Array.from(form.querySelectorAll(".js-booking-payment-method"));
+
+        methods.forEach((button) => {
+            button.addEventListener("click", () => {
+                methods.forEach((item) => {
+                    item.classList.remove("is-selected");
+                    item.setAttribute("aria-pressed", "false");
+                });
+                button.classList.add("is-selected");
+                button.setAttribute("aria-pressed", "true");
+                if (methodInput) {
+                    methodInput.value = button.dataset.paymentMethod || "";
+                }
+                if (submitButton) {
+                    submitButton.disabled = !methodInput?.value;
+                }
+            });
+        });
+    }
+
+    const detailsPanel = document.querySelector(".booking-qris-details");
+    const detailsToggle = document.querySelector(".js-booking-qris-details-toggle");
+    const detailsClose = document.querySelector(".js-booking-qris-details-close");
+
+    const closeDetailsPanel = () => {
+        if (!detailsPanel) {
+            return;
+        }
+        detailsPanel.classList.remove("is-open");
+        window.setTimeout(() => {
+            if (!detailsPanel.classList.contains("is-open")) {
+                detailsPanel.hidden = true;
+            }
+        }, 280);
+        detailsToggle?.setAttribute("aria-expanded", "false");
+    };
+
+    detailsToggle?.addEventListener("click", () => {
+        if (!detailsPanel) {
+            return;
+        }
+        if (detailsPanel.hidden) {
+            detailsPanel.hidden = false;
+            window.requestAnimationFrame(() => {
+                detailsPanel.classList.add("is-open");
+            });
+            detailsToggle.setAttribute("aria-expanded", "true");
+            return;
+        }
+        closeDetailsPanel();
+    });
+
+    detailsClose?.addEventListener("click", () => {
+        closeDetailsPanel();
+    });
+
+    const proofForm = document.querySelector(".js-booking-proof-form");
+    if (proofForm) {
+        const proofInput = proofForm.querySelector(".js-booking-proof-input");
+        const proofFile = proofForm.querySelector(".js-booking-proof-file");
+        const proofFileName = proofForm.querySelector(".js-booking-proof-file-name");
+        const proofSubmit = proofForm.querySelector(".js-booking-proof-submit");
+
+        proofInput?.addEventListener("change", () => {
+            const file = proofInput.files?.[0] || null;
+            if (proofFile && proofFileName) {
+                proofFile.hidden = !file;
+                proofFileName.textContent = file ? file.name : "";
+            }
+            if (proofSubmit) {
+                proofSubmit.disabled = !file;
+            }
+        });
+    }
+}
+
 function initCalendarInteractions() {
     const fab = document.querySelector(".js-calendar-fab");
     const fabMenu = document.getElementById("calendarFabMenu");
@@ -253,6 +1332,7 @@ function initCalendarInteractions() {
     const endTimeInputs = document.querySelectorAll(".js-calendar-end-time-input");
     const staffInputs = document.querySelectorAll(".js-calendar-staff-input");
     const scrollNowButton = document.querySelector(".js-calendar-scroll-now");
+    const agendaEntryTrigger = document.querySelector(".js-calendar-entry-trigger[data-entry-mode='agenda'][data-bs-target='#agendaModal']");
 
     const closeFabMenu = () => {
         fabMenu?.classList.remove("is-open");
@@ -313,20 +1393,30 @@ function initCalendarInteractions() {
                 input.value = staffId;
                 input.dataset.slotValue = staffId;
             });
+
+            agendaEntryTrigger?.click();
         });
     });
 
     scrollNowButton?.addEventListener("click", () => {
-        scrollCalendarToNow();
+        scrollCalendarToNow({ allowReload: true });
+    });
+
+    window.requestAnimationFrame(() => {
+        window.setTimeout(() => {
+            scrollCalendarToNow({ allowReload: false });
+        }, 180);
     });
 }
 
-function scrollCalendarToNow() {
+function scrollCalendarToNow({ allowReload = false } = {}) {
     const indicator = document.querySelector(".now-indicator");
     const scrollBox = document.querySelector(".cal-body-scroll");
 
     if (!indicator || !scrollBox) {
-        window.location.reload();
+        if (allowReload) {
+            window.location.reload();
+        }
         return;
     }
 
@@ -633,13 +1723,54 @@ function initCalendarEventViewer() {
     const dateNode = modal.querySelector(".js-agenda-view-date");
     const updatedNode = modal.querySelector(".js-agenda-view-updated");
     const totalNode = modal.querySelector(".js-agenda-view-total");
+    const footerNode = modal.querySelector(".calendar-agenda-view__footer");
+    const cancelReasonNode = modal.querySelector(".js-agenda-view-cancel-reason");
+    const cancelReasonTextNode = modal.querySelector(".js-agenda-view-cancel-reason-text");
+    const checkoutButton = modal.querySelector(".js-agenda-view-checkout");
+    const paymentSection = modal.querySelector(".js-agenda-view-payment");
+    const paymentMethodNode = modal.querySelector(".js-agenda-view-payment-method");
+    const paymentBadgeNode = modal.querySelector(".js-agenda-view-payment-badge");
+    const paymentPreviewNode = modal.querySelector(".js-agenda-view-payment-preview");
+    const paymentLink = modal.querySelector(".js-agenda-view-payment-link");
+    const paymentCompleteButton = modal.querySelector(".js-agenda-view-payment-complete");
     const statusToggle = modal.querySelector(".js-agenda-view-status-toggle");
     const statusLabel = modal.querySelector(".js-agenda-view-status-label");
     const statusMenu = modal.querySelector(".js-agenda-view-status-menu");
+    const productsSummary = modal.querySelector(".js-agenda-view-products-summary");
+    const productsCountNode = modal.querySelector(".js-agenda-view-products-count");
+    const productsEditTrigger = modal.querySelector(".js-agenda-view-products-edit");
+    const moreToggle = modal.querySelector(".js-agenda-view-more-toggle");
+    const moreMenu = modal.querySelector(".js-agenda-view-more-menu");
+    const editTrigger = modal.querySelector(".js-agenda-view-edit-trigger");
+    const addProductTrigger = modal.querySelector(".js-agenda-view-add-product");
+    const cancelTrigger = modal.querySelector(".js-agenda-view-cancel-trigger");
+    const noShowTrigger = modal.querySelector(".js-agenda-view-no-show-trigger");
+    const resetNoShowTrigger = modal.querySelector(".js-agenda-view-reset-no-show-trigger");
+    const productPanel = modal.querySelector(".js-agenda-product-panel");
+    const productClose = modal.querySelector(".js-agenda-product-close");
+    const productCancel = modal.querySelector(".js-agenda-product-cancel");
+    const productDone = modal.querySelector(".js-agenda-product-done");
+    const productSearch = modal.querySelector(".js-agenda-product-search");
+    const productResults = modal.querySelector(".js-agenda-product-results");
+    const productEmpty = modal.querySelector(".js-agenda-product-empty");
+    const productSelected = modal.querySelector(".js-agenda-product-selected");
+    const agendaForm = document.querySelector(".js-calendar-agenda-form");
 
     let currentCards = [];
     let currentStatus = "new";
     let expandedIndex = 0;
+    let currentReferenceKey = "";
+    let draftProducts = [];
+    let productDropdownOpen = false;
+    let productCatalog = [];
+    const agendaProductsByReference = new Map();
+
+    try {
+        const catalogs = JSON.parse(agendaForm?.dataset.salesCatalogs || "{}");
+        productCatalog = Array.isArray(catalogs.products) ? catalogs.products : [];
+    } catch (error) {
+        productCatalog = [];
+    }
 
     const statusConfig = {
         new: { label: "NEW", className: "is-new", iconClass: "" },
@@ -647,6 +1778,12 @@ function initCalendarEventViewer() {
         arrived: { label: "ARRIVED", className: "is-arrived", iconClass: "bi-emoji-smile" },
         started: { label: "STARTED", className: "is-started", iconClass: "bi-play-fill" },
         completed: { label: "COMPLETED", className: "is-completed", iconClass: "bi-check-lg" },
+        "no show": { label: "NO SHOW", className: "is-no-show", iconClass: "" },
+        cancelled: { label: "CANCELLED", className: "is-cancelled", iconClass: "" },
+    };
+    const paymentReviewConfig = {
+        waiting_admin: { label: "MENUNGGU ADMIN", className: "" },
+        complete: { label: "COMPLETE", className: "is-complete" },
     };
     const statusClassNames = Object.values(statusConfig).map((config) => config.className);
     const statusIconClassNames = Object.values(statusConfig)
@@ -655,8 +1792,18 @@ function initCalendarEventViewer() {
 
     const normalizeStatus = (value) => {
         const status = String(value || "new").toLowerCase();
-
+        if (status === "no-show" || status === "noshow") {
+            return "no show";
+        }
+        if (status === "canceled") {
+            return "cancelled";
+        }
         return statusConfig[status] ? status : "new";
+    };
+    const normalizePaymentReviewStatus = (value) => {
+        const status = String(value || "waiting_admin").toLowerCase();
+
+        return paymentReviewConfig[status] ? status : "waiting_admin";
     };
 
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -666,11 +1813,13 @@ function initCalendarEventViewer() {
         '"': "&quot;",
         "'": "&#039;",
     }[char]));
+    const normalizeText = (value) => String(value || "").trim().toLowerCase();
 
     const formatViewCurrency = (value) => `Rp ${new Intl.NumberFormat("id-ID", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     }).format(Number(value) || 0)}`;
+    const formatProductCount = (value) => `${Math.max(0, Number(value) || 0)} Produk`;
 
     const parseEventDate = (value) => {
         if (!value) {
@@ -729,7 +1878,316 @@ function initCalendarEventViewer() {
         date: card.dataset.eventDate || "",
         duration: Number(card.dataset.eventDuration || 0),
         price: Number(card.dataset.eventPrice || 0),
+        updatedAt: card.dataset.eventUpdatedAt || "",
+        cancelReason: card.dataset.eventCancelReason || "",
+        paymentMethod: card.dataset.eventPaymentMethod || "",
+        paymentProofUrl: card.dataset.eventPaymentProofUrl || "",
+        paymentReviewStatus: normalizePaymentReviewStatus(card.dataset.eventPaymentReviewStatus || "waiting_admin"),
     });
+    const normalizeProductItem = (item) => {
+        const id = String(item?.id || "").trim();
+        const name = String(item?.name || "Produk").trim();
+        if (!id || !name) {
+            return null;
+        }
+
+        return {
+            id,
+            name,
+            variant: String(item?.variant || "").trim(),
+            price: Number(item?.price || 0),
+            stock: Number(item?.stock || 0),
+            qty: Math.max(1, Number(item?.qty || 1)),
+        };
+    };
+    const cloneProductItems = (items) => items
+        .map((item) => normalizeProductItem(item))
+        .filter(Boolean)
+        .map((item) => ({ ...item }));
+    const parseStoredProducts = (rawValue) => {
+        if (!rawValue) {
+            return [];
+        }
+        try {
+            const parsed = JSON.parse(rawValue);
+            return Array.isArray(parsed) ? cloneProductItems(parsed) : [];
+        } catch (error) {
+            return [];
+        }
+    };
+    const getReferenceKey = (event) => {
+        if (!event) {
+            return "";
+        }
+        return event.reference || `${event.date || ""}:${event.start || ""}:${event.title || ""}`;
+    };
+    const getStoredProducts = () => {
+        if (!currentReferenceKey) {
+            return [];
+        }
+        if (agendaProductsByReference.has(currentReferenceKey)) {
+            return cloneProductItems(agendaProductsByReference.get(currentReferenceKey) || []);
+        }
+        const firstCard = currentCards[0];
+        const items = parseStoredProducts(firstCard?.dataset.eventProducts || "[]");
+        if (items.length) {
+            agendaProductsByReference.set(currentReferenceKey, cloneProductItems(items));
+        }
+        return items;
+    };
+    const saveStoredProducts = (items) => {
+        if (!currentReferenceKey) {
+            return;
+        }
+        const normalizedItems = cloneProductItems(items);
+        agendaProductsByReference.set(currentReferenceKey, normalizedItems);
+        const payload = JSON.stringify(normalizedItems);
+        currentCards.forEach((card) => {
+            card.dataset.eventProducts = payload;
+        });
+    };
+    const syncEventUpdatedAt = (value) => {
+        currentCards.forEach((card) => {
+            card.dataset.eventUpdatedAt = value || "";
+        });
+    };
+    const syncEventPaymentReviewStatus = (value) => {
+        const normalized = normalizePaymentReviewStatus(value);
+        currentCards.forEach((card) => {
+            card.dataset.eventPaymentReviewStatus = normalized;
+        });
+    };
+    const persistCurrentAgendaStatus = async (nextStatus) => {
+        const reference = currentCards[0]?.dataset.eventReference || "";
+        if (!reference) {
+            currentStatus = normalizeStatus(nextStatus);
+            updateCalendarCards();
+            renderStatus();
+            return;
+        }
+
+        const payload = await bookingApiRequest("/api/bookings/status", {
+            reference,
+            status: String(nextStatus || ""),
+        }, "Gagal memperbarui status agenda.");
+        currentStatus = normalizeStatus(payload.booking?.status || nextStatus);
+        syncEventUpdatedAt(payload.booking?.updated_at || "");
+        updateCalendarCards();
+        render();
+    };
+    const persistCurrentAgendaProducts = async (items) => {
+        const reference = currentCards[0]?.dataset.eventReference || "";
+        if (!reference) {
+            saveStoredProducts(items);
+            renderProductsSummary();
+            return;
+        }
+
+        const payload = await bookingApiRequest("/api/bookings/products", {
+            reference,
+            products_json: items,
+        }, "Gagal menyimpan produk agenda.");
+        saveStoredProducts(Array.isArray(payload.booking?.products) ? payload.booking.products : items);
+        syncEventUpdatedAt(payload.booking?.updated_at || "");
+        render();
+    };
+    const persistCurrentPaymentReviewStatus = async (nextStatus) => {
+        const reference = currentCards[0]?.dataset.eventReference || "";
+        if (!reference) {
+            syncEventPaymentReviewStatus(nextStatus);
+            render();
+            return;
+        }
+
+        const payload = await bookingApiRequest("/api/bookings/payment-review", {
+            reference,
+            payment_review_status: String(nextStatus || "waiting_admin"),
+        }, "Gagal memperbarui verifikasi pembayaran.");
+        syncEventPaymentReviewStatus(payload.booking?.payment_review_status || nextStatus);
+        syncEventUpdatedAt(payload.booking?.updated_at || "");
+        render();
+    };
+    const hideMoreMenu = () => {
+        if (!moreMenu) {
+            return;
+        }
+        moreMenu.hidden = true;
+        moreToggle?.setAttribute("aria-expanded", "false");
+    };
+    const isAgendaViewFinalStatus = (status) => {
+        const normalized = normalizeStatus(status);
+        return normalized === "completed" || normalized === "cancelled" || normalized === "no show";
+    };
+    const shouldHideAgendaMore = (status) => {
+        const normalized = normalizeStatus(status);
+        return normalized === "completed" || normalized === "cancelled" || normalized === "no show";
+    };
+    const shouldHideAgendaCheckout = (status) => {
+        const normalized = normalizeStatus(status);
+        return normalized === "cancelled" || normalized === "no show";
+    };
+    const buildAgendaEditPrefill = () => {
+        const events = currentCards.map(readEvent).sort((a, b) => a.start.localeCompare(b.start));
+        const first = events[0];
+        if (!first) {
+            return null;
+        }
+
+        return {
+            reference: first.reference || "",
+            customerName: first.title || "Walk-In",
+            staffName: first.staff || "",
+            staffId: currentCards[0]?.dataset.eventStaffId || "",
+            date: first.date || "",
+            time: first.start.slice(11, 16) || "",
+            services: events.map((item) => ({
+                name: item.subtitle || "Layanan",
+                startTime: item.start.slice(11, 16) || "",
+                duration: Number(item.duration || 0),
+                price: Number(item.price || 0),
+                resourceName: "",
+            })),
+        };
+    };
+    const openAgendaEditor = () => {
+        const targetUrl = new URL(window.location.href);
+        targetUrl.searchParams.set("modal", "agenda");
+        targetUrl.searchParams.set("entry", "agenda");
+        targetUrl.searchParams.set("agenda_title", "Ubah Agenda");
+        targetUrl.searchParams.set("source", "calendar-agenda");
+        const reference = currentCards[0]?.dataset.eventReference || "";
+        if (reference) {
+            targetUrl.searchParams.set("reference", reference);
+        }
+        const prefill = buildAgendaEditPrefill();
+        if (prefill) {
+            targetUrl.searchParams.set("prefill", JSON.stringify(prefill));
+        }
+        window.location.href = targetUrl.toString();
+    };
+    const syncProductEmptyState = () => {
+        const hasSelected = draftProducts.length > 0;
+        const hasResults = !productResults?.hidden;
+        if (productSelected) {
+            productSelected.hidden = !hasSelected;
+        }
+        if (productEmpty) {
+            productEmpty.hidden = hasSelected || hasResults;
+        }
+    };
+    const renderProductResults = () => {
+        if (!productResults) {
+            return;
+        }
+        const query = normalizeText(productSearch?.value || "");
+        const matches = productCatalog
+            .filter((item) => !query || normalizeText(`${item.name || ""} ${item.variant || ""} ${item.brand || ""}`).includes(query))
+            .slice(0, 8);
+
+        productResults.hidden = matches.length === 0;
+        productResults.innerHTML = matches.map((item) => `
+            <button type="button" class="calendar-agenda-product-panel__result sales-service-product-panel__result" data-agenda-product-id="${escapeHtml(String(item.id || ""))}">
+                <div>
+                    <strong>${escapeHtml(item.name || "Produk")}${item.variant ? ` - ${escapeHtml(item.variant)}` : ""}</strong>
+                    <span>${escapeHtml(formatViewCurrency(item.price || 0))}</span>
+                </div>
+                <small>${escapeHtml(String(item.stock || 0))}</small>
+            </button>
+        `).join("");
+        syncProductEmptyState();
+    };
+    const showProductResults = () => {
+        productDropdownOpen = true;
+        renderProductResults();
+    };
+    const hideProductResults = () => {
+        productDropdownOpen = false;
+        if (productResults) {
+            productResults.hidden = true;
+            productResults.innerHTML = "";
+        }
+        syncProductEmptyState();
+    };
+    const renderSelectedProducts = () => {
+        if (!productSelected) {
+            return;
+        }
+        productSelected.innerHTML = draftProducts.map((item) => `
+            <div class="calendar-agenda-product-row sales-service-product-row" data-agenda-selected-product="${escapeHtml(item.id)}">
+                <span class="calendar-agenda-product-row__icon sales-service-product-row__icon"><i class="bi bi-bottle"></i></span>
+                <strong class="calendar-agenda-product-row__name sales-service-product-row__name">${escapeHtml(item.name)}${item.variant ? ` - ${escapeHtml(item.variant)}` : ""}</strong>
+                <div class="calendar-agenda-product-row__qty sales-service-product-row__qty">
+                    <span>${escapeHtml(String(item.qty))}</span>
+                    <button type="button" data-agenda-product-qty="-1">-</button>
+                    <button type="button" data-agenda-product-qty="1">+</button>
+                </div>
+            </div>
+        `).join("");
+        syncProductEmptyState();
+    };
+    const renderProductsSummary = () => {
+        if (!productsSummary || !productsCountNode) {
+            return;
+        }
+        const totalProducts = getStoredProducts().reduce((sum, item) => sum + Math.max(1, Number(item.qty || 1)), 0);
+        productsSummary.classList.toggle("is-visible", totalProducts > 0);
+        productsCountNode.textContent = formatProductCount(totalProducts);
+    };
+    const openProductPanel = () => {
+        draftProducts = getStoredProducts();
+        productDropdownOpen = false;
+        if (productSearch) {
+            productSearch.value = "";
+        }
+        renderSelectedProducts();
+        hideProductResults();
+        productPanel?.classList.add("is-open");
+        productPanel?.setAttribute("aria-hidden", "false");
+        hideMoreMenu();
+    };
+    const closeProductPanel = () => {
+        draftProducts = [];
+        productDropdownOpen = false;
+        productPanel?.classList.remove("is-open");
+        productPanel?.setAttribute("aria-hidden", "true");
+        if (productSearch) {
+            productSearch.value = "";
+        }
+        hideProductResults();
+    };
+    const addProductToDraft = (productId) => {
+        const source = productCatalog.find((item) => String(item.id || "") === String(productId || ""));
+        const normalized = normalizeProductItem(source);
+        if (!normalized) {
+            return;
+        }
+
+        const existing = draftProducts.find((item) => item.id === normalized.id);
+        if (existing) {
+            existing.qty += 1;
+        } else {
+            draftProducts.push(normalized);
+        }
+
+        if (productSearch) {
+            productSearch.value = "";
+        }
+        renderSelectedProducts();
+        showProductResults();
+    };
+    const updateDraftQty = (productId, delta) => {
+        const item = draftProducts.find((entry) => entry.id === String(productId || ""));
+        if (!item) {
+            return;
+        }
+        const nextQty = item.qty + Number(delta || 0);
+        if (nextQty <= 0) {
+            draftProducts = draftProducts.filter((entry) => entry.id !== item.id);
+        } else {
+            item.qty = nextQty;
+        }
+        renderSelectedProducts();
+    };
 
     const matchingCardsFor = (card) => {
         const reference = card.dataset.eventReference || "";
@@ -749,20 +2207,48 @@ function initCalendarEventViewer() {
 
     const renderStatus = () => {
         const config = statusConfig[currentStatus] || statusConfig.new;
+        const isLocked = isAgendaViewFinalStatus(currentStatus);
 
         if (statusLabel) {
             statusLabel.textContent = config.label;
         }
 
         if (statusToggle) {
-            statusToggle.className = `calendar-agenda-view__status js-agenda-view-status-toggle ${config.className}`;
+            statusToggle.className = `calendar-agenda-view__status sales-service-view__status js-agenda-view-status-toggle ${config.className}${isLocked ? " is-locked" : ""}`;
+            statusToggle.disabled = isLocked;
+            statusToggle.setAttribute("aria-disabled", isLocked ? "true" : "false");
             const chevron = statusMenu && !statusMenu.hidden ? "bi-chevron-up" : "bi-chevron-down";
             const icon = statusToggle.querySelector("i");
 
             if (icon) {
                 icon.classList.remove("bi-chevron-up", "bi-chevron-down");
-                icon.classList.add(chevron);
+                if (!isLocked) {
+                    icon.classList.add(chevron);
+                }
             }
+        }
+
+        if (moreToggle?.parentElement instanceof HTMLElement) {
+            moreToggle.parentElement.hidden = shouldHideAgendaMore(currentStatus);
+            if (moreToggle.parentElement.hidden) {
+                hideMoreMenu();
+            }
+        }
+        if (checkoutButton) {
+            checkoutButton.hidden = shouldHideAgendaCheckout(currentStatus);
+        }
+        if (footerNode) {
+            footerNode.classList.toggle(
+                "is-compact",
+                Boolean(moreToggle?.parentElement?.hidden) && Boolean(checkoutButton?.hidden),
+            );
+        }
+
+        if (noShowTrigger) {
+            noShowTrigger.hidden = currentStatus === "no show";
+        }
+        if (resetNoShowTrigger) {
+            resetNoShowTrigger.hidden = currentStatus !== "no show";
         }
     };
 
@@ -777,17 +2263,17 @@ function initCalendarEventViewer() {
             const startTime = item.start.slice(11, 16) || "00:00";
 
             return `
-                <div class="calendar-agenda-view-service ${expanded ? "is-expanded" : ""}">
-                    <button class="calendar-agenda-view-service__head" type="button" data-agenda-view-service="${index}">
-                        <span class="calendar-agenda-view-service__avatar">${escapeHtml(letter)}</span>
-                        <span class="calendar-agenda-view-service__title">${escapeHtml(item.subtitle)} -</span>
+                <div class="calendar-agenda-view-service sales-service-view__service ${expanded ? "is-expanded" : ""}">
+                    <button class="calendar-agenda-view-service__head sales-service-view__service-head" type="button" data-agenda-view-service="${index}">
+                        <span class="calendar-agenda-view-service__avatar sales-service-view__service-avatar">${escapeHtml(letter)}</span>
+                        <span class="calendar-agenda-view-service__title sales-service-view__service-title">${escapeHtml(item.subtitle)} -</span>
                         <i class="bi ${expanded ? "bi-chevron-up" : "bi-chevron-down"}"></i>
                     </button>
-                    <div class="calendar-agenda-view-service__body">
-                        <div class="calendar-agenda-view-service__detail"><span>Jam mulai</span><strong>${escapeHtml(startTime)}</strong></div>
-                        <div class="calendar-agenda-view-service__detail"><span>Durasi</span><strong>${escapeHtml(formatDurationLabel(item.duration))}</strong></div>
-                        <div class="calendar-agenda-view-service__detail"><span>Staff</span><strong>${escapeHtml(item.staff)}</strong></div>
-                        <div class="calendar-agenda-view-service__detail"><span>Harga</span><strong>${escapeHtml(formatViewCurrency(item.price))}</strong></div>
+                    <div class="calendar-agenda-view-service__body sales-service-view__service-body">
+                        <div class="calendar-agenda-view-service__detail sales-service-view__service-detail"><span>Jam mulai</span><strong>${escapeHtml(startTime)}</strong></div>
+                        <div class="calendar-agenda-view-service__detail sales-service-view__service-detail"><span>Durasi</span><strong>${escapeHtml(formatDurationLabel(item.duration))}</strong></div>
+                        <div class="calendar-agenda-view-service__detail sales-service-view__service-detail"><span>Staff</span><strong>${escapeHtml(item.staff)}</strong></div>
+                        <div class="calendar-agenda-view-service__detail sales-service-view__service-detail"><span>Harga</span><strong>${escapeHtml(formatViewCurrency(item.price))}</strong></div>
                     </div>
                 </div>
             `;
@@ -800,6 +2286,38 @@ function initCalendarEventViewer() {
                 renderServices(events);
             });
         });
+    };
+    const renderPaymentReview = (event) => {
+        if (!paymentSection || !paymentMethodNode || !paymentBadgeNode || !paymentPreviewNode || !paymentLink || !paymentCompleteButton) {
+            return;
+        }
+
+        const hasPaymentProof = Boolean(event.paymentProofUrl);
+        const hasPaymentContext = hasPaymentProof || Boolean(event.paymentMethod);
+        paymentSection.hidden = !hasPaymentContext;
+
+        if (!hasPaymentContext) {
+            return;
+        }
+
+        const reviewStatus = normalizePaymentReviewStatus(event.paymentReviewStatus);
+        const reviewConfig = paymentReviewConfig[reviewStatus] || paymentReviewConfig.waiting_admin;
+        paymentMethodNode.textContent = event.paymentMethod ? `Metode: ${event.paymentMethod}` : "Pembayaran manual";
+        paymentBadgeNode.textContent = reviewConfig.label;
+        paymentBadgeNode.classList.toggle("is-complete", reviewConfig.className === "is-complete");
+
+        if (hasPaymentProof) {
+            paymentPreviewNode.innerHTML = `<img src="${escapeHtml(event.paymentProofUrl)}" alt="Bukti pembayaran pelanggan">`;
+            paymentLink.hidden = false;
+            paymentLink.href = event.paymentProofUrl;
+        } else {
+            paymentPreviewNode.innerHTML = '<span class="calendar-agenda-view__payment-empty">Bukti pembayaran belum diupload.</span>';
+            paymentLink.hidden = true;
+            paymentLink.removeAttribute("href");
+        }
+
+        paymentCompleteButton.disabled = !hasPaymentProof || reviewStatus === "complete";
+        paymentCompleteButton.textContent = reviewStatus === "complete" ? "Sudah complete" : "Tandai complete";
     };
 
     const updateCalendarCards = () => {
@@ -851,38 +2369,148 @@ function initCalendarEventViewer() {
         if (dateNode) {
             dateNode.textContent = formatViewDate(first.date) || first.date;
         }
+        if (cancelReasonNode && cancelReasonTextNode) {
+            const reason = (first.cancelReason || "").trim();
+            cancelReasonNode.hidden = !(currentStatus === "cancelled" && reason);
+            cancelReasonTextNode.textContent = reason;
+        }
 
         if (totalNode) {
             totalNode.textContent = `Total: ${formatViewCurrency(total)}`;
         }
 
         if (updatedNode) {
-            const now = new Date();
-            updatedNode.textContent = `Terakhir diperbarui pada: ${formatViewDate(first.date) || first.date} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+            const updatedAt = first.updatedAt || first.start || "";
+            if (updatedAt) {
+                const safeValue = updatedAt.replace(" ", "T");
+                const parsed = new Date(safeValue);
+                const datePart = updatedAt.slice(0, 10);
+                updatedNode.textContent = `Terakhir diperbarui pada: ${formatViewDate(datePart) || datePart} ${String(parsed.getHours()).padStart(2, "0")}:${String(parsed.getMinutes()).padStart(2, "0")}:${String(parsed.getSeconds()).padStart(2, "0")}`;
+            } else {
+                updatedNode.textContent = "Terakhir diperbarui pada: -";
+            }
         }
 
         renderStatus();
+        renderPaymentReview(first);
+        renderProductsSummary();
         renderServices(events);
     };
 
     statusToggle?.addEventListener("click", () => {
-        if (!statusMenu) {
+        if (!statusMenu || isAgendaViewFinalStatus(currentStatus)) {
             return;
         }
 
+        hideMoreMenu();
         statusMenu.hidden = !statusMenu.hidden;
         statusToggle.setAttribute("aria-expanded", statusMenu.hidden ? "false" : "true");
         renderStatus();
     });
 
     statusMenu?.querySelectorAll("[data-agenda-view-status]").forEach((option) => {
-        option.addEventListener("click", () => {
-            currentStatus = normalizeStatus(option.dataset.agendaViewStatus);
+        option.addEventListener("click", async () => {
             statusMenu.hidden = true;
             statusToggle?.setAttribute("aria-expanded", "false");
-            renderStatus();
-            updateCalendarCards();
+            try {
+                await persistCurrentAgendaStatus(option.dataset.agendaViewStatus || "new");
+            } catch (error) {
+                window.alert(error instanceof Error ? error.message : "Gagal memperbarui status agenda.");
+            }
         });
+    });
+    moreToggle?.addEventListener("click", () => {
+        if (!moreMenu) {
+            return;
+        }
+        statusMenu && (statusMenu.hidden = true);
+        statusToggle?.setAttribute("aria-expanded", "false");
+        moreMenu.hidden = !moreMenu.hidden;
+        moreToggle.setAttribute("aria-expanded", moreMenu.hidden ? "false" : "true");
+        renderStatus();
+    });
+    addProductTrigger?.addEventListener("click", () => {
+        openProductPanel();
+    });
+    editTrigger?.addEventListener("click", () => {
+        hideMoreMenu();
+        openAgendaEditor();
+    });
+    productsEditTrigger?.addEventListener("click", () => {
+        openProductPanel();
+    });
+    cancelTrigger?.addEventListener("click", async () => {
+        hideMoreMenu();
+        try {
+            await persistCurrentAgendaStatus("cancelled");
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal membatalkan agenda.");
+        }
+    });
+    noShowTrigger?.addEventListener("click", async () => {
+        hideMoreMenu();
+        try {
+            await persistCurrentAgendaStatus("no show");
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal mengubah status tidak hadir.");
+        }
+    });
+    resetNoShowTrigger?.addEventListener("click", async () => {
+        hideMoreMenu();
+        try {
+            await persistCurrentAgendaStatus("new");
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal memperbarui status agenda.");
+        }
+    });
+    productClose?.addEventListener("click", () => {
+        closeProductPanel();
+    });
+    productCancel?.addEventListener("click", () => {
+        closeProductPanel();
+    });
+    productDone?.addEventListener("click", async () => {
+        try {
+            await persistCurrentAgendaProducts(cloneProductItems(draftProducts));
+            closeProductPanel();
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal menyimpan produk agenda.");
+        }
+    });
+    paymentCompleteButton?.addEventListener("click", async () => {
+        try {
+            await persistCurrentPaymentReviewStatus("complete");
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal memperbarui verifikasi pembayaran.");
+        }
+    });
+    productSearch?.addEventListener("input", () => {
+        showProductResults();
+    });
+    productSearch?.addEventListener("click", () => {
+        if (productDropdownOpen) {
+            hideProductResults();
+            return;
+        }
+        showProductResults();
+    });
+    productResults?.addEventListener("click", (event) => {
+        const target = event.target instanceof Element ? event.target.closest("[data-agenda-product-id]") : null;
+        if (!target) {
+            return;
+        }
+        addProductToDraft(target.getAttribute("data-agenda-product-id") || "");
+    });
+    productSelected?.addEventListener("click", (event) => {
+        const qtyButton = event.target instanceof Element ? event.target.closest("[data-agenda-product-qty]") : null;
+        const row = event.target instanceof Element ? event.target.closest("[data-agenda-selected-product]") : null;
+        if (!qtyButton || !row) {
+            return;
+        }
+        updateDraftQty(
+            row.getAttribute("data-agenda-selected-product") || "",
+            Number(qtyButton.getAttribute("data-agenda-product-qty") || 0),
+        );
     });
 
     document.addEventListener("click", (event) => {
@@ -898,6 +2526,7 @@ function initCalendarEventViewer() {
             event.preventDefault();
             currentCards = matchingCardsFor(eventCard);
             expandedIndex = Math.max(0, currentCards.indexOf(eventCard));
+            currentReferenceKey = getReferenceKey(readEvent(currentCards[0]));
             render();
 
             if (typeof bootstrap !== "undefined") {
@@ -912,6 +2541,16 @@ function initCalendarEventViewer() {
             statusToggle?.setAttribute("aria-expanded", "false");
             renderStatus();
         }
+        if (moreMenu && !target.closest(".calendar-agenda-view__more-wrap")) {
+            hideMoreMenu();
+        }
+        if (
+            productDropdownOpen
+            && !target.closest(".js-agenda-product-search")
+            && !target.closest(".js-agenda-product-results")
+        ) {
+            hideProductResults();
+        }
     });
 
     modal.addEventListener("hidden.bs.modal", () => {
@@ -920,7 +2559,10 @@ function initCalendarEventViewer() {
         }
 
         statusToggle?.setAttribute("aria-expanded", "false");
+        hideMoreMenu();
+        closeProductPanel();
         currentCards = [];
+        currentReferenceKey = "";
     });
 }
 
@@ -931,6 +2573,8 @@ function initCalendarAgendaModal() {
     }
     const agendaModalEl = form.closest(".modal");
     const entryTriggers = Array.from(document.querySelectorAll(".js-calendar-entry-trigger[data-bs-target='#agendaModal']"));
+    let forcedAgendaTitle = "";
+    let forcedAgendaPrefill = null;
 
     let customers = [];
     let staffOptions = [];
@@ -987,9 +2631,28 @@ function initCalendarAgendaModal() {
     }
     const todayValue = form.dataset.today || "";
     const salesUrl = form.dataset.salesUrl || "/sales?tab=invoices";
+    const salesServicesUrl = (() => {
+        try {
+            const targetUrl = new URL(salesUrl, window.location.origin);
+            targetUrl.searchParams.set("tab", "services");
+            return targetUrl.toString();
+        } catch (error) {
+            return "/sales?tab=services";
+        }
+    })();
+    const salesInvoicesUrl = (() => {
+        try {
+            const targetUrl = new URL(salesUrl, window.location.origin);
+            targetUrl.searchParams.set("tab", "invoices");
+            return targetUrl.toString();
+        } catch (error) {
+            return "/sales?tab=invoices";
+        }
+    })();
 
     const serviceSearch = form.querySelector(".js-agenda-service-search");
     const serviceInputContainer = form.querySelector(".js-agenda-service-inputs");
+    const agendaReferenceInput = form.querySelector(".js-agenda-reference-input");
     const serviceCards = Array.from(form.querySelectorAll(".js-agenda-service-card"));
     const filterButtons = Array.from(form.querySelectorAll(".js-agenda-filter"));
     const pickerBack = form.querySelector(".js-agenda-picker-back");
@@ -1409,6 +3072,11 @@ function initCalendarAgendaModal() {
             return;
         }
 
+        if (forcedAgendaTitle && !isSalesMode()) {
+            agendaTitle.textContent = forcedAgendaTitle;
+            return;
+        }
+
         agendaTitle.textContent = isSalesMode() ? "Penjualan Baru" : "Agenda Baru";
     };
     const syncServiceSearchPlaceholder = () => {
@@ -1746,6 +3414,36 @@ function initCalendarAgendaModal() {
         duration: Number(card.dataset.serviceDuration || 60),
         category: card.dataset.serviceCategory || "hair-cut",
     });
+    const parseAgendaPrefill = (rawValue) => {
+        if (!rawValue) {
+            return null;
+        }
+
+        try {
+            const parsed = JSON.parse(rawValue);
+            return parsed && typeof parsed === "object" ? parsed : null;
+        } catch (error) {
+            return null;
+        }
+    };
+    const findAgendaServiceByName = (name) => {
+        const target = normalize(name);
+        if (!target) {
+            return null;
+        }
+
+        const cardMatch = serviceCards.find((card) => normalize(card.dataset.serviceName) === target);
+        if (cardMatch) {
+            return servicePayload(cardMatch);
+        }
+
+        const catalogMatch = catalogItems("services").find((item) => normalize(item?.name) === target);
+        if (catalogMatch) {
+            return catalogMatch;
+        }
+
+        return catalogItems("services").find((item) => normalize(item?.name).includes(target) || target.includes(normalize(item?.name))) || null;
+    };
 
     const selectedSubtotal = () => selectedServices().reduce((sum, service) => sum + (service.subtotal ?? service.price), 0);
     const selectedDiscountAmount = () => selectedServices().reduce((sum, service) => sum + (service.discount || 0), 0);
@@ -3569,6 +5267,57 @@ function initCalendarAgendaModal() {
         });
     });
 
+    const agendaParams = new URLSearchParams(window.location.search);
+    const agendaSource = agendaParams.get("source") || "";
+    const calendarAgendaReturnUrl = (() => {
+        const params = new URLSearchParams(agendaParams.toString());
+        params.delete("modal");
+        params.delete("entry");
+        params.delete("agenda_title");
+        params.delete("reference");
+        params.delete("prefill");
+        params.delete("source");
+        return `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}${window.location.hash || ""}`;
+    })();
+    if (agendaParams.get("modal") === "agenda" && agendaModalEl) {
+        forcedAgendaTitle = agendaParams.get("agenda_title") || "";
+        agendaEntryMode = agendaParams.get("entry") === "sales" ? "sales" : "agenda";
+        forcedAgendaPrefill = parseAgendaPrefill(agendaParams.get("prefill"));
+        activeSalesCatalog = "services";
+        syncSalesSubfilterDefault();
+        syncAgendaMode();
+
+        const nextQuery = (() => {
+            const params = new URLSearchParams(agendaParams.toString());
+            params.delete("modal");
+            params.delete("entry");
+            params.delete("agenda_title");
+            params.delete("reference");
+            params.delete("prefill");
+            params.delete("source");
+            return params.toString();
+        })();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
+
+        const openAgendaFromUrl = () => {
+            const applyPrefillAfterShow = () => {
+                applyForcedAgendaPrefill();
+                agendaModalEl.removeEventListener("shown.bs.modal", applyPrefillAfterShow);
+            };
+
+            if (typeof bootstrap !== "undefined") {
+                agendaModalEl.addEventListener("shown.bs.modal", applyPrefillAfterShow);
+                bootstrap.Modal.getOrCreateInstance(agendaModalEl).show();
+            } else {
+                applyForcedAgendaPrefill();
+            }
+
+            window.history.replaceState({}, "", nextUrl);
+        };
+
+        window.setTimeout(openAgendaFromUrl, 0);
+    }
+
     salesCatalogTabs.forEach((button) => {
         button.addEventListener("click", () => {
             activeSalesCatalog = button.dataset.salesCatalog || "services";
@@ -4013,7 +5762,72 @@ function initCalendarAgendaModal() {
         }
         renderVoucherDrawer();
     };
+    const applyForcedAgendaPrefill = () => {
+        if (!forcedAgendaPrefill) {
+            return;
+        }
 
+        const prefill = forcedAgendaPrefill;
+        forcedAgendaPrefill = null;
+
+        if (agendaReferenceInput) {
+            agendaReferenceInput.value = String(prefill.reference || "");
+        }
+
+        if (prefill.date) {
+            setAgendaDate(prefill.date);
+        }
+
+        if (prefill.time && timeInput) {
+            timeInput.value = prefill.time;
+        }
+
+        const targetStaffName = String(prefill.staffName || "").trim();
+        const targetStaffId = String(prefill.staffId || "").trim();
+        const staffSelect = form.querySelector("[name='staff_id']");
+        if (staffSelect) {
+            const matchedOption = Array.from(staffSelect.options).find((option) => (
+                (targetStaffId && option.value === targetStaffId)
+                || (targetStaffName && normalize(option.textContent) === normalize(targetStaffName))
+            ));
+            if (matchedOption) {
+                staffSelect.value = matchedOption.value;
+            }
+        }
+
+        const customerName = String(prefill.customerName || "").trim();
+        if (customerName && normalize(customerName) !== "walk-in") {
+            setNamedCustomer(customerName);
+        } else {
+            setWalkInCustomer();
+        }
+
+        selectedItems.splice(0, selectedItems.length);
+        const services = Array.isArray(prefill.services) ? prefill.services : [];
+        services.forEach((serviceData, index) => {
+            const source = findAgendaServiceByName(serviceData.name || "");
+            if (!source?.id) {
+                return;
+            }
+
+            selectedItems.push(createAgendaItem(source, {
+                checkoutExpanded: index === 0,
+                duration: Number(serviceData.duration || source.duration || 60),
+                startTime: String(serviceData.startTime || prefill.time || ""),
+                staffId: targetStaffId || String(staffSelect?.value || staffOptions[0]?.id || ""),
+                staffName: targetStaffName || staffSelect?.selectedOptions?.[0]?.textContent?.trim() || staffOptions[0]?.name || selectedStaffName(),
+                resourceId: String(serviceData.resourceId || ""),
+                resourceName: String(serviceData.resourceName || "Select"),
+                checkoutUnitPrice: Number(serviceData.price || source.price || 0),
+            }));
+        });
+
+        if (selectedItems.length > 0) {
+            setReviewMode(true);
+        } else {
+            updateSelectedServices();
+        }
+    };
     const filterCustomerRows = () => {
         const query = normalize(customerSearch?.value);
         customerRows.forEach((row) => {
@@ -4121,6 +5935,7 @@ function initCalendarAgendaModal() {
         agendaEntryMode = "agenda";
         activeSalesCatalog = "services";
         activeSalesSubfilter = "all";
+        forcedAgendaPrefill = null;
         useSharedStartTime = false;
         paymentDraftAmount = 0;
         isPaymentDraftDirty = false;
@@ -4187,6 +6002,9 @@ function initCalendarAgendaModal() {
         if (reviewList) {
             reviewList.innerHTML = "";
         }
+        if (agendaReferenceInput) {
+            agendaReferenceInput.value = "";
+        }
         setWalkInCustomer();
         filterCustomerRows();
         syncAgendaMode();
@@ -4197,6 +6015,22 @@ function initCalendarAgendaModal() {
     };
 
     closeRequest?.addEventListener("click", () => {
+        if (agendaSource === "sales-services") {
+            window.location.href = salesServicesUrl;
+            return;
+        }
+        if (agendaSource === "sales-invoices") {
+            window.location.href = salesInvoicesUrl;
+            return;
+        }
+        if (agendaSource === "calendar-agenda") {
+            window.location.href = calendarAgendaReturnUrl;
+            return;
+        }
+        if (forcedAgendaTitle) {
+            window.location.href = salesServicesUrl;
+            return;
+        }
         showExitConfirm();
     });
 
@@ -4240,6 +6074,7 @@ function initSalesTabs() {
     const fab = shell.querySelector(".js-sales-fab");
     const fabMenu = document.getElementById("salesFabMenu");
     const fabIcon = fab?.querySelector("i");
+    const calendarUrl = shell.dataset.calendarUrl || "/calendar?modal=agenda&entry=agenda";
     const invoiceRowsBody = shell.querySelector(".js-sales-invoice-rows");
     const salesInvoiceView = document.querySelector(".js-sales-invoice-view");
     const salesInvoiceCloseButtons = Array.from(document.querySelectorAll(".js-sales-invoice-close"));
@@ -4260,6 +6095,112 @@ function initSalesTabs() {
     const salesInvoiceCopy = document.querySelector(".js-sales-invoice-copy");
     const salesInvoiceEmail = document.querySelector(".js-sales-invoice-email");
     const salesInvoiceWhatsapp = document.querySelector(".js-sales-invoice-whatsapp");
+    const dailyExportButtons = Array.from(shell.querySelectorAll("[data-sales-export]"));
+    const dateModeInput = shell.querySelector(".js-sales-date-mode-input");
+    const dateModeLabel = shell.querySelector(".js-sales-date-mode-label");
+    const dateButton = shell.querySelector(".js-sales-date-button");
+    const dateButtonLabel = dateButton?.querySelector("span");
+    const datePicker = shell.querySelector(".js-sales-date-picker");
+    const summaryModal = document.getElementById("salesSummaryModal");
+    const summaryModalContent = summaryModal?.querySelector(".sales-summary-modal");
+    const summaryReceipt = summaryModal?.querySelector(".js-sales-summary-receipt");
+    const summaryModeButtons = Array.from(summaryModal?.querySelectorAll(".js-sales-summary-mode") || []);
+    const summaryItemsToggle = summaryModal?.querySelector(".js-sales-summary-items-toggle");
+    const summaryItemsInput = summaryModal?.querySelector(".js-sales-summary-items-input");
+    const summaryPrintButton = summaryModal?.querySelector(".js-sales-summary-print");
+    const servicesShopLabels = Array.from(shell.querySelectorAll("[data-sales-services-shop-label]"));
+    const servicesShopOptions = Array.from(shell.querySelectorAll("[data-sales-services-shop-option]"));
+    const servicesStaffLabel = shell.querySelector("[data-sales-services-staff-label]");
+    const servicesStaffOptions = Array.from(shell.querySelectorAll("[data-sales-services-staff-option]"));
+    const servicesRangeLabels = Array.from(shell.querySelectorAll("[data-sales-services-range-label]"));
+    const servicesExportButtons = Array.from(shell.querySelectorAll("[data-sales-services-export]"));
+    const servicesSearchLabel = shell.querySelector("[data-sales-services-search-label]");
+    const servicesSearchOptions = Array.from(shell.querySelectorAll("[data-sales-services-search-option]"));
+    const servicesSearchInput = shell.querySelector(".js-sales-services-search");
+    const servicesRows = Array.from(shell.querySelectorAll(".js-sales-services-row"));
+    const servicesTotal = shell.querySelector(".js-sales-services-total");
+    const salesServiceViewModal = document.getElementById("salesServiceViewModal");
+    const salesServiceCustomer = salesServiceViewModal?.querySelector(".js-sales-service-customer");
+    const salesServiceBranch = salesServiceViewModal?.querySelector(".js-sales-service-branch");
+    const salesServiceDate = salesServiceViewModal?.querySelector(".js-sales-service-date");
+    const salesServiceUpdated = salesServiceViewModal?.querySelector(".js-sales-service-updated");
+    const salesServiceTotal = salesServiceViewModal?.querySelector(".js-sales-service-total");
+    const salesServiceCount = salesServiceViewModal?.querySelector(".js-sales-service-count");
+    const salesServiceNotes = salesServiceViewModal?.querySelector(".js-sales-service-notes");
+    const salesServiceFooter = salesServiceViewModal?.querySelector(".sales-service-view__footer");
+    const salesServiceServices = salesServiceViewModal?.querySelector(".js-sales-service-services");
+    const salesServiceStatusToggle = salesServiceViewModal?.querySelector(".js-sales-service-status-toggle");
+    const salesServiceStatusLabel = salesServiceViewModal?.querySelector(".js-sales-service-status-label");
+    const salesServiceStatusMenu = salesServiceViewModal?.querySelector(".js-sales-service-status-menu");
+    const salesServiceMoreToggle = salesServiceViewModal?.querySelector(".js-sales-service-more-toggle");
+    const salesServiceMoreMenu = salesServiceViewModal?.querySelector(".js-sales-service-more-menu");
+    const salesServiceEditTrigger = salesServiceViewModal?.querySelector(".js-sales-service-edit-trigger");
+    const salesServiceAddProductTrigger = salesServiceViewModal?.querySelector(".js-sales-service-add-product-trigger");
+    const salesServiceCancelTrigger = salesServiceViewModal?.querySelector(".js-sales-service-cancel-trigger");
+    const salesServiceNoShowTrigger = salesServiceViewModal?.querySelector(".js-sales-service-no-show-trigger");
+    const salesServiceResetNoShowTrigger = salesServiceViewModal?.querySelector(".js-sales-service-reset-no-show-trigger");
+    const salesServiceCheckout = salesServiceViewModal?.querySelector(".js-sales-service-checkout");
+    const salesServiceProductsSummary = salesServiceViewModal?.querySelector(".js-sales-service-products-summary");
+    const salesServiceProductsCount = salesServiceViewModal?.querySelector(".js-sales-service-products-count");
+    const salesServiceProductsEdit = salesServiceViewModal?.querySelector(".js-sales-service-products-edit");
+    const salesServiceProductPanel = salesServiceViewModal?.querySelector(".js-sales-service-product-panel");
+    const salesServiceProductBackdrop = salesServiceViewModal?.querySelector(".js-sales-service-product-backdrop");
+    const salesServiceProductClose = salesServiceViewModal?.querySelector(".js-sales-service-product-close");
+    const salesServiceProductCancel = salesServiceViewModal?.querySelector(".js-sales-service-product-cancel");
+    const salesServiceProductDone = salesServiceViewModal?.querySelector(".js-sales-service-product-done");
+    const salesServiceProductSearch = salesServiceViewModal?.querySelector(".js-sales-service-product-search");
+    const salesServiceProductResults = salesServiceViewModal?.querySelector(".js-sales-service-product-results");
+    const salesServiceProductEmpty = salesServiceViewModal?.querySelector(".js-sales-service-product-empty");
+    const salesServiceProductSelected = salesServiceViewModal?.querySelector(".js-sales-service-product-selected");
+    const salesServiceToast = document.querySelector(".js-sales-service-toast");
+    const salesServiceToastClose = salesServiceToast?.querySelector(".js-sales-service-toast-close");
+    const salesServiceCancelReasonModal = document.getElementById("salesServiceCancelReasonModal");
+    const salesServiceCancelReasonForm = salesServiceCancelReasonModal?.querySelector(".js-sales-service-cancel-form");
+    const salesServiceCancelReasonInputs = Array.from(salesServiceCancelReasonModal?.querySelectorAll('input[name="sales_service_cancel_reason"]') || []);
+    const salesServiceCancelSubmit = salesServiceCancelReasonModal?.querySelector(".js-sales-service-cancel-submit");
+    const salesServiceNoShowModal = document.getElementById("salesServiceNoShowModal");
+    const salesServiceNoShowConfirm = salesServiceNoShowModal?.querySelector(".js-sales-service-no-show-confirm");
+    const invoicesShopLabels = Array.from(shell.querySelectorAll("[data-sales-invoices-shop-label]"));
+    const invoicesShopOptions = Array.from(shell.querySelectorAll("[data-sales-invoices-shop-option]"));
+    const invoicesBackdateInput = shell.querySelector(".js-sales-invoices-backdate-input");
+    const invoicesRangeLabels = Array.from(shell.querySelectorAll("[data-sales-invoices-range-label]"));
+    const invoicesExportButtons = Array.from(shell.querySelectorAll("[data-sales-invoices-export]"));
+    const invoicesSearchLabel = shell.querySelector("[data-sales-invoices-search-label]");
+    const invoicesSearchOptions = Array.from(shell.querySelectorAll("[data-sales-invoices-search-option]"));
+    const invoicesSearchInput = shell.querySelector(".js-sales-invoices-search");
+    const invoiceRows = Array.from(shell.querySelectorAll(".js-sales-invoice-row"));
+    const invoicesTotal = shell.querySelector(".js-sales-invoices-total");
+    const vouchersRefresh = shell.querySelector(".js-sales-vouchers-refresh");
+    const vouchersRangeLabels = Array.from(shell.querySelectorAll("[data-sales-vouchers-range-label]"));
+    const vouchersExportButtons = Array.from(shell.querySelectorAll("[data-sales-vouchers-export]"));
+    const vouchersSearchLabel = shell.querySelector("[data-sales-vouchers-search-label]");
+    const vouchersSearchOptions = Array.from(shell.querySelectorAll("[data-sales-vouchers-search-option]"));
+    const vouchersSearchInput = shell.querySelector(".js-sales-vouchers-search");
+    const vouchersRows = Array.from(shell.querySelectorAll(".js-sales-vouchers-row"));
+    const vouchersTotal = shell.querySelector(".js-sales-vouchers-total");
+    const cashDrawerRangeLabels = Array.from(shell.querySelectorAll("[data-sales-cashdrawer-range-label]"));
+    const cashDrawerRows = Array.from(shell.querySelectorAll(".js-sales-cashdrawer-row"));
+    const openRegisterModal = document.getElementById("salesOpenRegisterModal");
+    const openRegisterAmount = openRegisterModal?.querySelector(".js-sales-open-register-amount");
+    const openRegisterNote = openRegisterModal?.querySelector(".js-sales-open-register-note");
+    const openRegisterSave = openRegisterModal?.querySelector(".js-sales-open-register-save");
+    const registerView = document.querySelector(".js-sales-register-view");
+    const registerCloseButtons = Array.from(document.querySelectorAll(".js-sales-register-close"));
+    const registerName = registerView?.querySelector(".js-sales-register-name");
+    const registerAvatar = registerView?.querySelector(".js-sales-register-avatar");
+    const registerMeta = registerView?.querySelector(".js-sales-register-meta");
+    const registerNote = registerView?.querySelector(".js-sales-register-note");
+    const registerStatus = registerView?.querySelector(".js-sales-register-status");
+    const registerExpected = registerView?.querySelector(".js-sales-register-expected");
+    const registerActual = registerView?.querySelector(".js-sales-register-actual");
+    const registerDiff = registerView?.querySelector(".js-sales-register-diff");
+    const registerTabs = Array.from(registerView?.querySelectorAll(".js-sales-register-tab") || []);
+    const registerPanels = Array.from(registerView?.querySelectorAll("[data-register-panel]") || []);
+    const registerTransactions = registerView?.querySelector(".js-sales-register-transactions");
+    const registerSummary = registerView?.querySelector(".js-sales-register-summary");
+    const registerDownload = registerView?.querySelector(".js-sales-register-download");
+    const registerEmail = registerView?.querySelector(".js-sales-register-email");
+    const registerCorrection = registerView?.querySelector(".js-sales-register-correction");
     const salesEscapeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
         "&": "&amp;",
         "<": "&lt;",
@@ -4269,15 +6210,13 @@ function initSalesTabs() {
     }[char]));
     const fabConfig = {
         daily: { visible: false, icon: "plus-lg", menu: false },
-        services: { visible: true, icon: "plus-lg", menu: true },
-        classes: { visible: true, icon: "pencil", menu: true },
-        invoices: { visible: true, icon: "plus-lg", menu: true },
+        services: { visible: true, icon: "plus-lg", menu: false },
+        invoices: { visible: true, icon: "plus-lg", menu: false },
         vouchers: { visible: false, icon: "plus-lg", menu: false },
-        "cash-drawer": { visible: true, icon: "plus-lg", menu: true },
-        "cash-flow": { visible: true, icon: "plus-lg", menu: true },
     };
 
     const applyTab = (tabName) => {
+        activeSalesTab = tabName;
         tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.salesTab === tabName));
         panels.forEach((panel) => panel.classList.toggle("is-active", panel.dataset.salesPanel === tabName));
 
@@ -4295,7 +6234,1531 @@ function initSalesTabs() {
         }
     };
 
+    const salesPaginationRegistry = new Map();
+
+    const closeSalesPaginationMenus = (exceptKey = "") => {
+        salesPaginationRegistry.forEach((pagination, key) => {
+            if (!pagination || key === exceptKey) {
+                return;
+            }
+            pagination.closeMenu();
+        });
+    };
+
+    const createSalesPagination = (key, rows, totalNode, options = {}) => {
+        const container = shell.querySelector(`[data-sales-pagination="${key}"]`);
+        if (!container) {
+            return {
+                syncMatches() {},
+                closeMenu() {},
+            };
+        }
+
+        if (rows.length === 0) {
+            container.querySelectorAll("button, input").forEach((element) => {
+                element.disabled = true;
+            });
+            return {
+                syncMatches() {},
+                closeMenu() {},
+            };
+        }
+
+        const toggle = container.querySelector("[data-sales-page-size-toggle]");
+        const menu = container.querySelector("[data-sales-page-size-menu]");
+        const prevButton = container.querySelector("[data-sales-page-prev]");
+        const nextButton = container.querySelector("[data-sales-page-next]");
+        const pageList = container.querySelector("[data-sales-page-list]");
+        const pageInput = container.querySelector("[data-sales-page-input]");
+        const topButton = container.querySelector("[data-sales-page-top]");
+        const tableCard = options.tableCard || container.closest(".sales-table-card") || container.parentElement;
+        const tbody = rows[0]?.closest("tbody") || tableCard?.querySelector("tbody") || null;
+        const scrollWrap = options.scrollWrap || tableCard?.querySelector(".sales-table-scroll") || tableCard;
+        const headerCount = tbody?.closest("table")?.querySelectorAll("thead th").length || 1;
+        const pageSizeOptions = [10, 20, 30, 50];
+        const state = {
+            currentPage: 1,
+            pageSize: Number(options.initialPageSize) > 0 ? Number(options.initialPageSize) : 20,
+        };
+        const canScrollElement = (element) => (
+            element instanceof HTMLElement && element.scrollHeight > element.clientHeight + 4
+        );
+
+        const ensureEmptyRow = () => {
+            if (!tbody) {
+                return null;
+            }
+
+            let emptyRow = tbody.querySelector(`.js-sales-pagination-empty[data-sales-pagination-empty="${key}"]`);
+            if (!emptyRow) {
+                emptyRow = document.createElement("tr");
+                emptyRow.className = "js-sales-pagination-empty";
+                emptyRow.dataset.salesPaginationEmpty = key;
+                emptyRow.hidden = true;
+                emptyRow.innerHTML = `<td colspan="${headerCount}" class="sales-no-data">No Data</td>`;
+                tbody.appendChild(emptyRow);
+            }
+
+            return emptyRow;
+        };
+
+        const getMatchedRows = () => rows.filter((row) => row.dataset.paginationMatch !== "0");
+
+        const setPageInputValue = () => {
+            if (pageInput) {
+                pageInput.value = String(state.currentPage);
+            }
+        };
+
+        const renderPageButtons = (pageCount) => {
+            if (!pageList) {
+                return;
+            }
+
+            const maxButtons = 5;
+            const startPage = Math.max(1, Math.min(state.currentPage - 2, pageCount - maxButtons + 1));
+            const endPage = Math.min(pageCount, startPage + maxButtons - 1);
+            pageList.innerHTML = "";
+
+            for (let page = startPage; page <= endPage; page += 1) {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = `sales-pagination__page${page === state.currentPage ? " is-active" : ""}`;
+                button.textContent = String(page);
+                button.addEventListener("click", () => {
+                    state.currentPage = page;
+                    refresh();
+                });
+                pageList.appendChild(button);
+            }
+        };
+
+        const renderPageSizeMenu = () => {
+            if (!menu) {
+                return;
+            }
+
+            menu.innerHTML = pageSizeOptions.map((option) => `
+                <button type="button" class="sales-pagination__page-size-option${option === state.pageSize ? " is-active" : ""}" data-sales-page-size-option="${option}">
+                    ${option}/page
+                </button>
+            `).join("");
+
+            menu.querySelectorAll("[data-sales-page-size-option]").forEach((button) => {
+                button.addEventListener("click", () => {
+                    state.pageSize = Number(button.getAttribute("data-sales-page-size-option") || 20);
+                    state.currentPage = 1;
+                    refresh();
+                    closeMenu();
+                });
+            });
+        };
+
+        const openMenu = () => {
+            closeSalesPaginationMenus(key);
+            renderPageSizeMenu();
+            menu.hidden = false;
+            container.classList.add("is-page-size-open");
+            toggle?.setAttribute("aria-expanded", "true");
+        };
+
+        const closeMenu = () => {
+            if (!menu) {
+                return;
+            }
+            menu.hidden = true;
+            container.classList.remove("is-page-size-open");
+            toggle?.setAttribute("aria-expanded", "false");
+        };
+
+        const refresh = () => {
+            const matchedRows = getMatchedRows();
+            const totalCount = matchedRows.length;
+            const pageCount = Math.max(1, Math.ceil(totalCount / state.pageSize));
+            state.currentPage = Math.min(Math.max(1, state.currentPage), pageCount);
+            const startIndex = (state.currentPage - 1) * state.pageSize;
+            const endIndex = startIndex + state.pageSize;
+
+            rows.forEach((row, index) => {
+                const matchedIndex = matchedRows.indexOf(row);
+                const isVisible = matchedIndex >= startIndex && matchedIndex < endIndex;
+                row.hidden = matchedIndex === -1 || !isVisible;
+            });
+
+            const emptyRow = ensureEmptyRow();
+            if (emptyRow) {
+                emptyRow.hidden = totalCount !== 0;
+            }
+
+            if (totalNode) {
+                totalNode.textContent = String(totalCount);
+            }
+
+            if (toggle) {
+                toggle.innerHTML = `${state.pageSize}/page <i class="bi bi-chevron-${menu?.hidden === false ? "up" : "down"}"></i>`;
+            }
+
+            prevButton && (prevButton.disabled = state.currentPage <= 1);
+            nextButton && (nextButton.disabled = state.currentPage >= pageCount || totalCount === 0);
+            renderPageButtons(pageCount);
+            setPageInputValue();
+        };
+
+        toggle?.addEventListener("click", () => {
+            if (menu?.hidden === false) {
+                closeMenu();
+                refresh();
+                return;
+            }
+            openMenu();
+            refresh();
+        });
+
+        prevButton?.addEventListener("click", () => {
+            state.currentPage = Math.max(1, state.currentPage - 1);
+            refresh();
+        });
+
+        nextButton?.addEventListener("click", () => {
+            const pageCount = Math.max(1, Math.ceil(getMatchedRows().length / state.pageSize));
+            state.currentPage = Math.min(pageCount, state.currentPage + 1);
+            refresh();
+        });
+
+        pageInput?.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") {
+                return;
+            }
+            event.preventDefault();
+            const pageCount = Math.max(1, Math.ceil(getMatchedRows().length / state.pageSize));
+            const nextPage = Math.min(pageCount, Math.max(1, Number(pageInput.value || 1)));
+            state.currentPage = nextPage;
+            refresh();
+        });
+
+        pageInput?.addEventListener("blur", () => {
+            const pageCount = Math.max(1, Math.ceil(getMatchedRows().length / state.pageSize));
+            const nextPage = Math.min(pageCount, Math.max(1, Number(pageInput.value || 1)));
+            state.currentPage = nextPage;
+            refresh();
+        });
+
+        topButton?.addEventListener("click", () => {
+            if (canScrollElement(scrollWrap)) {
+                scrollWrap.scrollTo({ top: 0, behavior: "smooth" });
+                return;
+            }
+
+            const topAnchor = tableCard?.querySelector(".sales-table-scroll") || tableCard || container;
+            const topPosition = window.scrollY + topAnchor.getBoundingClientRect().top - 12;
+            window.scrollTo({ top: Math.max(0, topPosition), behavior: "smooth" });
+        });
+
+        rows.forEach((row) => {
+            row.dataset.paginationMatch = row.hidden ? "0" : "1";
+        });
+
+        salesPaginationRegistry.set(key, {
+            syncMatches: refresh,
+            closeMenu,
+        });
+
+        refresh();
+
+        return salesPaginationRegistry.get(key);
+    };
+
+    const servicesPagination = createSalesPagination("services", servicesRows, servicesTotal);
+    const invoicesPagination = createSalesPagination("invoices", invoiceRows, invoicesTotal);
+    const vouchersPagination = createSalesPagination("vouchers", vouchersRows, vouchersTotal);
+
+    const buildGenericSalesPaginationMarkup = (totalCount, pageSize) => `
+        <div class="sales-pagination__meta">Total <span data-generic-pagination-total>${totalCount}</span></div>
+        <div class="sales-pagination__page-size">
+            <button type="button" class="sales-pagination__select" data-sales-page-size-toggle aria-expanded="false">${pageSize}/page <i class="bi bi-chevron-down"></i></button>
+            <div class="sales-pagination__page-size-menu" data-sales-page-size-menu hidden></div>
+        </div>
+        <button type="button" class="sales-pagination__nav" data-sales-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+        <div class="sales-pagination__pages" data-sales-page-list></div>
+        <button type="button" class="sales-pagination__nav" data-sales-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+        <div class="sales-pagination__goto">Go to</div>
+        <input class="sales-pagination__input" data-sales-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+        <button type="button" class="sales-pagination__top" data-sales-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
+    `;
+
+    const parseLegacyPaginationPageSize = (footer) => {
+        if (!(footer instanceof HTMLElement)) {
+            return 20;
+        }
+
+        const label = footer.textContent || "";
+        const match = label.match(/(\d+)\s*\/\s*page/i);
+        const size = match ? Number(match[1]) : 20;
+        return Number.isFinite(size) && size > 0 ? size : 20;
+    };
+
+    const resolveGenericPaginationContext = (footer) => {
+        if (!(footer instanceof HTMLElement)) {
+            return {
+                tableCard: null,
+                tbody: null,
+                scrollWrap: null,
+            };
+        }
+
+        const preferredScrollSelector = ".sales-table-scroll, .inventory-table-wrap, .staff-attendance-scroll, .customer-detail-table-wrap";
+        let sibling = footer.previousElementSibling;
+
+        while (sibling) {
+            if (sibling instanceof HTMLElement) {
+                const tbody = sibling.querySelector("tbody");
+                if (tbody instanceof HTMLElement) {
+                    return {
+                        tableCard: footer.parentElement instanceof HTMLElement ? footer.parentElement : sibling,
+                        tbody,
+                        scrollWrap: sibling.matches(preferredScrollSelector)
+                            ? sibling
+                            : sibling.querySelector(preferredScrollSelector) || sibling,
+                    };
+                }
+            }
+            sibling = sibling.previousElementSibling;
+        }
+
+        const fallbackCard = footer.closest(".customers-table-card, .staff-attendance-table-card, .inventory-table-card, .vouchers-table-card, .customer-detail-card")
+            || (footer.parentElement instanceof HTMLElement ? footer.parentElement : null);
+        const fallbackBody = fallbackCard?.querySelector("tbody") || null;
+        const fallbackScroll = fallbackCard?.querySelector(preferredScrollSelector) || fallbackCard;
+
+        return {
+            tableCard: fallbackCard,
+            tbody: fallbackBody,
+            scrollWrap: fallbackScroll,
+        };
+    };
+
+    const hydrateGenericPagination = () => {
+        const footerSelectors = [
+            ".customers-table-footer",
+            ".inventory-table__footer",
+        ].join(", ");
+
+        const footers = Array.from(shell.querySelectorAll(footerSelectors))
+            .filter((footer) => !footer.hasAttribute("data-sales-pagination"));
+
+        footers.forEach((footer, index) => {
+            if (!(footer instanceof HTMLElement)) {
+                return;
+            }
+
+            const { tableCard, tbody, scrollWrap } = resolveGenericPaginationContext(footer);
+            if (!(tableCard instanceof HTMLElement) || !(tbody instanceof HTMLElement)) {
+                return;
+            }
+
+            const rows = Array.from(tbody.querySelectorAll("tr"))
+                .filter((row) => !row.classList.contains("js-sales-pagination-empty"));
+
+            const initialPageSize = parseLegacyPaginationPageSize(footer);
+            const key = `generic-${index + 1}`;
+
+            footer.classList.add("sales-pagination", "sales-pagination--services", "sales-pagination--fixed", "generic-sales-pagination");
+            footer.setAttribute("data-sales-pagination", key);
+            footer.innerHTML = buildGenericSalesPaginationMarkup(rows.length, initialPageSize);
+
+            const totalNode = footer.querySelector("[data-generic-pagination-total]");
+
+            createSalesPagination(key, rows, totalNode, {
+                initialPageSize,
+                tableCard,
+                scrollWrap,
+            });
+        });
+    };
+
+    hydrateGenericPagination();
+
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element) || target.closest(".sales-pagination__page-size")) {
+            return;
+        }
+        closeSalesPaginationMenus();
+    });
+
     const salesFormatMoneyDecimal = (value) => `Rp ${Number(value || 0).toLocaleString("id-ID")},00`;
+    let activeServicesStaff = "all";
+    let activeServicesSearchField = "ref";
+    let activeServicesStartDate = "";
+    let activeServicesEndDate = "";
+    let activeServicesPreset = "last_month";
+    let activeInvoicesSearchField = "invoice";
+    let activeInvoicesStartDate = "";
+    let activeInvoicesEndDate = "";
+    let activeInvoicesPreset = "7d";
+    let activeVouchersSearchField = "customer";
+    let activeVouchersStartDate = "";
+    let activeVouchersEndDate = "";
+    let activeVouchersPreset = "30d";
+    let activeCashDrawerStartDate = "";
+    let activeCashDrawerEndDate = "";
+    let activeCashDrawerPreset = "this_year";
+    let activeSalesTab = "daily";
+    let currentRegisterDetail = null;
+    let currentServiceRef = "";
+    let currentServiceExpandedIndex = 0;
+    let currentServiceStatus = "new";
+    let currentServiceCancelReason = "";
+    let currentServiceToastTimer = 0;
+    let pendingServiceReopenRef = "";
+    let pendingServiceSavedToast = false;
+    let salesServiceDraftProducts = [];
+    let salesServiceProductDropdownOpen = false;
+    const salesServiceProductsByRef = new Map();
+    const salesProductCatalog = (() => {
+        try {
+            const parsed = JSON.parse(shell.dataset.productsCatalog || "[]");
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            return [];
+        }
+    })();
+    const normalizeSalesValue = (value) => String(value || "").trim().toLowerCase();
+    const formatLongDate = (value) => {
+        if (!value) {
+            return "";
+        }
+
+        const date = new Date(`${value}T00:00:00`);
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+
+        return new Intl.DateTimeFormat("id-ID", {
+            day: "2-digit",
+            month: "long",
+            year: "numeric",
+        }).format(date);
+    };
+    const formatShortDate = (value) => {
+        if (!value) {
+            return "";
+        }
+
+        const date = new Date(`${value}T00:00:00`);
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+
+        return new Intl.DateTimeFormat("id-ID", {
+            day: "numeric",
+            month: "short",
+            year: "numeric",
+        }).format(date);
+    };
+    const updateSalesDropdownLabel = (nodes, text) => {
+        const list = Array.isArray(nodes) ? nodes : [nodes];
+        list.forEach((node) => {
+            if (node) {
+                node.textContent = text;
+            }
+        });
+    };
+    const setSalesActiveOption = (options, value, attributeName) => {
+        options.forEach((option) => {
+            option.classList.toggle("is-active", (option.getAttribute(attributeName) || "") === value);
+        });
+    };
+    const padReceipt = (label, middle = "", value = "") => {
+        const left = String(label || "");
+        const center = String(middle || "");
+        const right = String(value || "");
+        const leftColumn = `${left}${center ? ` ${center}` : ""}`;
+        const spaces = Math.max(2, 30 - leftColumn.length - right.length);
+        return `${leftColumn}${" ".repeat(spaces)}${right}`.trimEnd();
+    };
+    const getSummaryData = (key) => {
+        if (!summaryModal) {
+            return null;
+        }
+
+        const raw = key === "transaction"
+            ? summaryModalContent?.dataset.transactionSummary
+            : summaryModalContent?.dataset.registerSummary;
+
+        if (!raw) {
+            return null;
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch (error) {
+            return null;
+        }
+    };
+    const buildReceiptBlock = (summary, includeItems) => {
+        if (!summary) {
+            return "";
+        }
+
+        const lines = [
+            "       Star Salon - Star Salon",
+            `          ${summary.title || "Summary"}`,
+            `     Printed on ${summaryModalContent?.dataset.printedAt || ""}`,
+        ];
+
+        if (Array.isArray(summary.summary_lines) && summary.summary_lines.length) {
+            lines.push("", "--------------------------------");
+            summary.summary_lines.forEach((item) => {
+                lines.push(padReceipt(item.label, item.count, item.value));
+            });
+        }
+
+        (summary.sections || []).forEach((section) => {
+            lines.push("", "--------------------------------");
+            section.forEach((item) => {
+                lines.push(padReceipt(item.label, item.count, item.value));
+            });
+        });
+
+        if (includeItems && Array.isArray(summary.item_lines) && summary.item_lines.length) {
+            lines.push("", "--------------------------------");
+            summary.item_lines.forEach((item) => {
+                lines.push(padReceipt(item.label, item.count, item.value));
+            });
+        }
+
+        lines.push("", "         Powered by Zenwel");
+
+        return lines.join("\n");
+    };
+    const renderSummaryReceipt = () => {
+        if (!summaryModal || !summaryReceipt) {
+            return;
+        }
+
+        const activeMode = summaryModal.dataset.summaryMode || "register";
+        const includeItems = activeMode === "transaction" && Boolean(summaryItemsInput?.checked);
+        const summary = getSummaryData(activeMode);
+        summaryReceipt.textContent = buildReceiptBlock(summary, includeItems);
+        summaryModeButtons.forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.summaryMode === activeMode);
+        });
+
+        if (summaryItemsToggle) {
+            summaryItemsToggle.hidden = activeMode !== "transaction";
+        }
+    };
+    const downloadDailySummary = (format) => {
+        const summary = buildReceiptBlock(getSummaryData("register"), false);
+        const blob = new Blob([summary], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `daily-sales-summary.${format}`;
+        link.click();
+        URL.revokeObjectURL(url);
+    };
+    const updateServicesRangeLabel = () => {
+        const presetLabel = activeServicesPreset === "today" ? "Hari ini"
+            : activeServicesPreset === "yesterday" ? "Kemarin"
+                : activeServicesPreset === "this_month" ? "Bulan ini"
+                    : activeServicesPreset === "7d" ? "7 hari sebelumnya"
+                        : activeServicesPreset === "30d" ? "30 hari sebelumnya"
+                            : activeServicesPreset === "last_month" ? "Bulan kemarin"
+                                : activeServicesPreset === "last_year" ? "Tahun kemarin"
+                                    : activeServicesPreset === "this_year" ? "Tahun ini"
+                                        : "Bulan kemarin";
+        const label = activeServicesStartDate && activeServicesEndDate
+            ? `${presetLabel}, ${formatShortDate(activeServicesStartDate)} - ${formatShortDate(activeServicesEndDate)}`
+            : presetLabel;
+        updateSalesDropdownLabel(servicesRangeLabels, label);
+    };
+    const serviceViewStatusConfig = {
+        new: { label: "NEW", className: "is-new" },
+        confirmed: { label: "CONFIRMED", className: "is-confirmed" },
+        arrived: { label: "ARRIVED", className: "is-arrived" },
+        started: { label: "STARTED", className: "is-started" },
+        completed: { label: "COMPLETED", className: "is-completed" },
+        "no show": { label: "NO SHOW", className: "is-no-show" },
+        cancelled: { label: "CANCELLED", className: "is-cancelled" },
+    };
+    const normalizeServiceViewStatus = (value) => {
+        const normalized = String(value || "").trim().toLowerCase().replace(/[_-]+/g, " ");
+        if (normalized === "noshow") {
+            return "no show";
+        }
+        return serviceViewStatusConfig[normalized] ? normalized : "new";
+    };
+    const formatServiceViewCurrency = (value) => `Rp ${new Intl.NumberFormat("id-ID", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    }).format(Number(value) || 0)}`;
+    const formatServiceViewDate = (value) => {
+        if (!value) {
+            return "";
+        }
+
+        const date = new Date(`${value}T00:00:00`);
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+
+        return new Intl.DateTimeFormat("id-ID", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+        }).format(date).replace(/\./g, "");
+    };
+    const formatServiceUpdatedAtValue = (value) => {
+        if (!value || value === "-") {
+            return "-";
+        }
+        if (/^\d{2}-[A-Za-z]{3}-\d{4}/.test(value)) {
+            return value;
+        }
+        const safeValue = String(value).replace(" ", "T");
+        const date = new Date(safeValue);
+        if (Number.isNaN(date.getTime())) {
+            return String(value);
+        }
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        return `${String(date.getDate()).padStart(2, "0")}-${months[date.getMonth()]}-${date.getFullYear()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
+    };
+    const formatServiceDuration = (minutes) => {
+        const total = Math.max(0, Number(minutes) || 0);
+        const hours = Math.floor(total / 60);
+        const mins = total % 60;
+
+        if (hours && mins) {
+            return `${hours}h ${mins}min`;
+        }
+
+        if (hours) {
+            return `${hours}h`;
+        }
+
+        return `${mins}min`;
+    };
+    const parseSalesServiceProducts = (rawValue) => {
+        if (!rawValue) {
+            return [];
+        }
+        try {
+            const parsed = JSON.parse(rawValue);
+            return Array.isArray(parsed) ? cloneSalesServiceProducts(parsed) : [];
+        } catch (error) {
+            return [];
+        }
+    };
+    const getServiceRowsByReference = (reference) => servicesRows.filter((row) => (row.dataset.ref || "") === reference);
+    const readServiceViewRows = (reference) => getServiceRowsByReference(reference).map((row) => ({
+        row,
+        bookingId: Number(row.dataset.bookingId || 0),
+        ref: row.dataset.ref || "",
+        customer: row.dataset.customer || "Walk-In",
+        staff: row.dataset.staff || "Staff",
+        item: row.dataset.item || "Layanan",
+        resource: row.dataset.resource || "-",
+        location: row.dataset.location || "Star Salon",
+        status: normalizeServiceViewStatus(row.dataset.status || "new"),
+        date: row.dataset.date || "",
+        startTime: row.dataset.startTime || "",
+        durationMinutes: Number(row.dataset.durationMinutes || 0),
+        price: Number(row.dataset.price || 0),
+        updatedAt: row.dataset.updatedAt || "-",
+        notes: row.dataset.notes || "",
+        products: parseSalesServiceProducts(row.dataset.products || "[]"),
+        cancelReason: row.dataset.cancelReason || "",
+    }));
+    const syncServiceStatusRows = (reference, nextStatus, { cancellationReason = "", updatedAt = "" } = {}) => {
+        const rows = getServiceRowsByReference(reference);
+        const statusKey = normalizeServiceViewStatus(nextStatus);
+        const config = serviceViewStatusConfig[statusKey] || serviceViewStatusConfig.new;
+        const classNames = Object.values(serviceViewStatusConfig).map((item) => item.className);
+        const fallbackUpdatedAt = (() => {
+            const now = new Date();
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            return `${String(now.getDate()).padStart(2, "0")}-${months[now.getMonth()]}-${now.getFullYear()} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+        })();
+
+        rows.forEach((row) => {
+            row.dataset.status = config.label;
+            row.dataset.updatedAt = formatServiceUpdatedAtValue(updatedAt || fallbackUpdatedAt);
+            if (statusKey === "cancelled") {
+                row.dataset.cancelReason = cancellationReason;
+            } else {
+                delete row.dataset.cancelReason;
+            }
+            const pill = row.querySelector(".sales-status-pill");
+            if (pill) {
+                pill.classList.remove(...classNames);
+                pill.classList.add(config.className);
+                pill.textContent = config.label;
+            }
+        });
+    };
+    const hideSalesServiceToast = () => {
+        if (currentServiceToastTimer) {
+            window.clearTimeout(currentServiceToastTimer);
+            currentServiceToastTimer = 0;
+        }
+        if (salesServiceToast) {
+            salesServiceToast.hidden = true;
+        }
+    };
+    const showSalesServiceToast = () => {
+        if (!salesServiceToast) {
+            return;
+        }
+        hideSalesServiceToast();
+        salesServiceToast.hidden = false;
+        currentServiceToastTimer = window.setTimeout(() => {
+            salesServiceToast.hidden = true;
+            currentServiceToastTimer = 0;
+        }, 2200);
+    };
+    const hideSalesServiceStatusMenu = () => {
+        if (!salesServiceStatusMenu) {
+            return;
+        }
+
+        salesServiceStatusMenu.hidden = true;
+        salesServiceStatusToggle?.setAttribute("aria-expanded", "false");
+        renderSalesServiceStatus();
+    };
+    const hideSalesServiceMoreMenu = () => {
+        if (!salesServiceMoreMenu) {
+            return;
+        }
+
+        salesServiceMoreMenu.hidden = true;
+        salesServiceMoreToggle?.setAttribute("aria-expanded", "false");
+    };
+    const cloneSalesServiceProducts = (items) => items.map((item) => ({
+        id: String(item.id || ""),
+        name: String(item.name || "Produk"),
+        variant: String(item.variant || ""),
+        price: Number(item.price || 0),
+        stock: Number(item.stock || 0),
+        qty: Math.max(1, Number(item.qty || 1)),
+    })).filter((item) => item.id);
+    const getSalesServiceProducts = (reference) => {
+        if (salesServiceProductsByRef.has(reference)) {
+            return cloneSalesServiceProducts(salesServiceProductsByRef.get(reference) || []);
+        }
+
+        const firstRow = getServiceRowsByReference(reference)[0];
+        const items = parseSalesServiceProducts(firstRow?.dataset.products || "[]");
+        if (items.length) {
+            salesServiceProductsByRef.set(reference, cloneSalesServiceProducts(items));
+        }
+        return items;
+    };
+    const setSalesServiceProducts = (reference, items) => {
+        if (!reference) {
+            return;
+        }
+        const normalized = cloneSalesServiceProducts(items);
+        salesServiceProductsByRef.set(reference, normalized);
+        const payload = JSON.stringify(normalized);
+        getServiceRowsByReference(reference).forEach((row) => {
+            row.dataset.products = payload;
+        });
+    };
+    const renderSalesServiceProductsSummary = () => {
+        if (!salesServiceProductsSummary || !salesServiceProductsCount) {
+            return;
+        }
+        const totalProducts = getSalesServiceProducts(currentServiceRef).reduce((sum, item) => sum + item.qty, 0);
+        salesServiceProductsSummary.classList.toggle("is-visible", totalProducts > 0);
+        salesServiceProductsCount.textContent = `${totalProducts} Produk`;
+    };
+    const syncSalesServiceProductEmpty = () => {
+        const hasSelected = salesServiceDraftProducts.length > 0;
+        const hasResults = !salesServiceProductResults?.hidden;
+        if (salesServiceProductSelected) {
+            salesServiceProductSelected.hidden = !hasSelected;
+        }
+        if (salesServiceProductEmpty) {
+            salesServiceProductEmpty.hidden = hasSelected || hasResults;
+        }
+    };
+    const renderSalesServiceProductResults = () => {
+        if (!salesServiceProductResults) {
+            return;
+        }
+        const query = normalizeSalesValue(salesServiceProductSearch?.value || "");
+        const matches = salesProductCatalog
+            .filter((item) => !query || normalizeSalesValue(`${item.name} ${item.variant}`).includes(query))
+            .slice(0, 8);
+        salesServiceProductResults.hidden = matches.length === 0;
+        salesServiceProductResults.innerHTML = matches.map((item) => `
+            <button type="button" class="sales-service-product-panel__result" data-sales-service-product-id="${salesEscapeHtml(item.id)}">
+                <div>
+                    <strong>${salesEscapeHtml(item.name)}${item.variant ? ` - ${salesEscapeHtml(item.variant)}` : ""}</strong>
+                    <span>${salesEscapeHtml(formatServiceViewCurrency(item.price))}</span>
+                </div>
+                <small>${salesEscapeHtml(String(item.stock))}</small>
+            </button>
+        `).join("");
+        syncSalesServiceProductEmpty();
+    };
+    const showSalesServiceProductResults = () => {
+        salesServiceProductDropdownOpen = true;
+        renderSalesServiceProductResults();
+    };
+    const hideSalesServiceProductResults = () => {
+        salesServiceProductDropdownOpen = false;
+        if (salesServiceProductResults) {
+            salesServiceProductResults.hidden = true;
+            salesServiceProductResults.innerHTML = "";
+        }
+        syncSalesServiceProductEmpty();
+    };
+    const renderSalesServiceSelectedProducts = () => {
+        if (!salesServiceProductSelected) {
+            return;
+        }
+        salesServiceProductSelected.innerHTML = salesServiceDraftProducts.map((item) => `
+            <div class="sales-service-product-row" data-sales-service-selected-product="${salesEscapeHtml(item.id)}">
+                <span class="sales-service-product-row__icon"><i class="bi bi-bottle"></i></span>
+                <strong class="sales-service-product-row__name">${salesEscapeHtml(item.name)}${item.variant ? ` - ${salesEscapeHtml(item.variant)}` : ""}</strong>
+                <div class="sales-service-product-row__qty">
+                    <span>${salesEscapeHtml(String(item.qty))}</span>
+                    <button type="button" data-sales-service-product-qty="-1">-</button>
+                    <button type="button" data-sales-service-product-qty="1">+</button>
+                </div>
+            </div>
+        `).join("");
+        syncSalesServiceProductEmpty();
+    };
+    const openSalesServiceProductPanel = () => {
+        salesServiceDraftProducts = getSalesServiceProducts(currentServiceRef);
+        salesServiceProductDropdownOpen = false;
+        if (salesServiceProductSearch) {
+            salesServiceProductSearch.value = "";
+        }
+        renderSalesServiceSelectedProducts();
+        hideSalesServiceProductResults();
+        if (salesServiceProductBackdrop) {
+            salesServiceProductBackdrop.hidden = false;
+        }
+        if (salesServiceProductPanel) {
+            salesServiceProductPanel.hidden = false;
+        }
+        salesServiceProductPanel?.classList.add("is-open");
+        salesServiceProductPanel?.setAttribute("aria-hidden", "false");
+        hideSalesServiceMoreMenu();
+    };
+    const closeSalesServiceProductPanel = () => {
+        salesServiceDraftProducts = [];
+        salesServiceProductPanel?.classList.remove("is-open");
+        salesServiceProductPanel?.setAttribute("aria-hidden", "true");
+        if (salesServiceProductSearch) {
+            salesServiceProductSearch.value = "";
+        }
+        hideSalesServiceProductResults();
+        if (salesServiceProductBackdrop) {
+            salesServiceProductBackdrop.hidden = true;
+        }
+        if (salesServiceProductPanel) {
+            salesServiceProductPanel.classList.remove("is-open");
+            salesServiceProductPanel.hidden = true;
+            salesServiceProductPanel.setAttribute("aria-hidden", "true");
+        }
+        syncSalesServiceProductEmpty();
+    };
+    const addSalesServiceProduct = (productId) => {
+        const source = salesProductCatalog.find((item) => item.id === String(productId || ""));
+        if (!source) {
+            return;
+        }
+        const existing = salesServiceDraftProducts.find((item) => item.id === source.id);
+        if (existing) {
+            existing.qty += 1;
+        } else {
+            salesServiceDraftProducts.push({ ...source });
+        }
+        if (salesServiceProductSearch) {
+            salesServiceProductSearch.value = "";
+        }
+        renderSalesServiceSelectedProducts();
+        showSalesServiceProductResults();
+    };
+    const updateSalesServiceProductQty = (productId, delta) => {
+        const item = salesServiceDraftProducts.find((entry) => entry.id === String(productId || ""));
+        if (!item) {
+            return;
+        }
+        const nextQty = item.qty + Number(delta || 0);
+        if (nextQty <= 0) {
+            salesServiceDraftProducts = salesServiceDraftProducts.filter((entry) => entry.id !== item.id);
+        } else {
+            item.qty = nextQty;
+        }
+        renderSalesServiceSelectedProducts();
+    };
+    const updateSalesServiceCancelSubmit = () => {
+        if (!salesServiceCancelSubmit) {
+            return;
+        }
+
+        salesServiceCancelSubmit.disabled = !salesServiceCancelReasonInputs.some((input) => input.checked);
+    };
+    const resetSalesServiceCancelForm = () => {
+        salesServiceCancelReasonForm?.reset();
+        updateSalesServiceCancelSubmit();
+    };
+    const applySalesServiceStatus = (nextStatus, { cancellationReason = "", updatedAt = "" } = {}) => {
+        currentServiceStatus = normalizeServiceViewStatus(nextStatus);
+        currentServiceCancelReason = currentServiceStatus === "cancelled" ? cancellationReason : "";
+        syncServiceStatusRows(currentServiceRef, currentServiceStatus, {
+            cancellationReason: currentServiceCancelReason,
+            updatedAt,
+        });
+        renderSalesServiceStatus();
+    };
+    const persistSalesServiceStatus = async (nextStatus, { cancellationReason = "" } = {}) => {
+        const payload = await bookingApiRequest("/api/bookings/status", {
+            reference: currentServiceRef,
+            status: normalizeServiceViewStatus(nextStatus),
+            reason: cancellationReason,
+        }, "Gagal memperbarui status layanan.");
+        const booking = payload.booking || {};
+        applySalesServiceStatus(booking.status || nextStatus, {
+            cancellationReason: booking.cancel_reason || cancellationReason,
+            updatedAt: booking.updated_at || "",
+        });
+        return booking;
+    };
+    const persistSalesServiceProducts = async (items) => {
+        const payload = await bookingApiRequest("/api/bookings/products", {
+            reference: currentServiceRef,
+            products_json: items,
+        }, "Gagal menyimpan produk layanan.");
+        const products = Array.isArray(payload.booking?.products) ? payload.booking.products : items;
+        setSalesServiceProducts(currentServiceRef, products);
+        if (payload.booking?.updated_at) {
+            getServiceRowsByReference(currentServiceRef).forEach((row) => {
+                row.dataset.updatedAt = formatServiceUpdatedAtValue(payload.booking.updated_at);
+            });
+        }
+        renderSalesServiceProductsSummary();
+        return payload.booking || {};
+    };
+    const isSalesServiceFinalStatus = (status) => {
+        const normalized = normalizeServiceViewStatus(status);
+        return normalized === "completed" || normalized === "cancelled" || normalized === "no show";
+    };
+    const shouldHideSalesServiceMore = (status) => {
+        const normalized = normalizeServiceViewStatus(status);
+        return normalized === "started" || normalized === "completed" || normalized === "cancelled" || normalized === "no show";
+    };
+    const shouldHideSalesServiceCheckout = (status) => {
+        const normalized = normalizeServiceViewStatus(status);
+        return normalized === "cancelled" || normalized === "no show";
+    };
+    const reopenSalesServiceView = (reference, { showSavedToast = false } = {}) => {
+        if (!reference || !salesServiceViewModal || typeof bootstrap === "undefined") {
+            return;
+        }
+
+        pendingServiceReopenRef = reference;
+        pendingServiceSavedToast = showSavedToast;
+        bootstrap.Modal.getOrCreateInstance(salesServiceViewModal).hide();
+    };
+    const buildAgendaEditPrefill = (reference) => {
+        const rows = readServiceViewRows(reference);
+        if (rows.length === 0) {
+            return null;
+        }
+
+        const primary = rows[0];
+        const matchedServiceRow = servicesRows.find((row) => (
+            (row.dataset.ref || "") === reference
+            && normalizeSalesValue(row.dataset.item || "") === normalizeSalesValue(primary.item || "")
+        ));
+
+        return {
+            reference,
+            customerName: primary.customer || "Walk-In",
+            staffName: primary.staff || "",
+            staffId: matchedServiceRow?.dataset.staffId || "",
+            date: primary.date || "",
+            time: primary.startTime || "",
+            services: rows.map((item) => ({
+                name: item.item || "Layanan",
+                startTime: item.startTime || "",
+                duration: Number(item.durationMinutes || 0),
+                price: Number(item.price || 0),
+                resourceName: item.resource || "",
+            })),
+        };
+    };
+    const openCalendarAgendaEditor = (reference) => {
+        const targetUrl = new URL(calendarUrl, window.location.origin);
+        targetUrl.searchParams.set("modal", "agenda");
+        targetUrl.searchParams.set("entry", "agenda");
+        targetUrl.searchParams.set("agenda_title", "Ubah Agenda");
+        if (reference) {
+            targetUrl.searchParams.set("reference", reference);
+            const prefill = buildAgendaEditPrefill(reference);
+            if (prefill) {
+                targetUrl.searchParams.set("prefill", JSON.stringify(prefill));
+            }
+        }
+        window.location.href = targetUrl.toString();
+    };
+    const renderSalesServiceStatus = () => {
+        if (!salesServiceStatusToggle || !salesServiceStatusLabel) {
+            return;
+        }
+
+        const config = serviceViewStatusConfig[currentServiceStatus] || serviceViewStatusConfig.new;
+        const isLocked = isSalesServiceFinalStatus(currentServiceStatus);
+        salesServiceStatusLabel.textContent = config.label;
+        salesServiceStatusToggle.className = `sales-service-view__status js-sales-service-status-toggle ${config.className}${isLocked ? " is-locked" : ""}`;
+        salesServiceStatusToggle.disabled = isLocked;
+        salesServiceStatusToggle.setAttribute("aria-disabled", isLocked ? "true" : "false");
+        const icon = salesServiceStatusToggle.querySelector("i");
+        if (icon) {
+            icon.classList.remove("bi-chevron-up", "bi-chevron-down");
+            if (!isLocked) {
+                icon.classList.add(salesServiceStatusMenu && !salesServiceStatusMenu.hidden ? "bi-chevron-up" : "bi-chevron-down");
+            }
+        }
+
+        if (salesServiceMoreToggle?.parentElement instanceof HTMLElement) {
+            salesServiceMoreToggle.parentElement.hidden = shouldHideSalesServiceMore(currentServiceStatus);
+            if (salesServiceMoreToggle.parentElement.hidden) {
+                hideSalesServiceMoreMenu();
+            }
+        }
+        if (salesServiceCheckout) {
+            salesServiceCheckout.hidden = shouldHideSalesServiceCheckout(currentServiceStatus);
+        }
+        if (salesServiceFooter) {
+            salesServiceFooter.classList.toggle(
+                "is-compact",
+                Boolean(salesServiceMoreToggle?.parentElement?.hidden) && Boolean(salesServiceCheckout?.hidden),
+            );
+        }
+        if (salesServiceNoShowTrigger) {
+            salesServiceNoShowTrigger.hidden = currentServiceStatus === "no show";
+        }
+        if (salesServiceResetNoShowTrigger) {
+            salesServiceResetNoShowTrigger.hidden = currentServiceStatus !== "no show";
+        }
+    };
+    const renderSalesServiceCards = (items) => {
+        if (!salesServiceServices) {
+            return;
+        }
+
+        salesServiceServices.innerHTML = items.map((item, index) => {
+            const expanded = index === currentServiceExpandedIndex;
+            const avatar = (item.item || "L").trim().charAt(0).toUpperCase() || "L";
+
+            return `
+                <div class="sales-service-view__service ${expanded ? "is-expanded" : ""}">
+                    <button class="sales-service-view__service-head" type="button" data-sales-service-index="${index}">
+                        <span class="sales-service-view__service-avatar">${salesEscapeHtml(avatar)}</span>
+                        <span class="sales-service-view__service-title">${salesEscapeHtml(item.item)} -</span>
+                        <i class="bi ${expanded ? "bi-chevron-up" : "bi-chevron-down"}"></i>
+                    </button>
+                    <div class="sales-service-view__service-body">
+                        <div class="sales-service-view__service-detail"><span>Jam mulai</span><strong>${salesEscapeHtml(item.startTime || "00:00")}</strong></div>
+                        <div class="sales-service-view__service-detail"><span>Durasi</span><strong>${salesEscapeHtml(formatServiceDuration(item.durationMinutes))}</strong></div>
+                        <div class="sales-service-view__service-detail"><span>Staff</span><strong>${salesEscapeHtml(item.staff)}</strong></div>
+                        <div class="sales-service-view__service-detail"><span>Harga</span><strong>${salesEscapeHtml(formatServiceViewCurrency(item.price))}</strong></div>
+                    </div>
+                </div>
+            `;
+        }).join("");
+
+        salesServiceServices.querySelectorAll("[data-sales-service-index]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const nextIndex = Number(button.dataset.salesServiceIndex || 0);
+                currentServiceExpandedIndex = currentServiceExpandedIndex === nextIndex ? -1 : nextIndex;
+                renderSalesServiceCards(items);
+            });
+        });
+    };
+    const openSalesServiceView = (reference) => {
+        if (!salesServiceViewModal || typeof bootstrap === "undefined") {
+            return;
+        }
+
+        const items = readServiceViewRows(reference);
+        if (!items.length) {
+            return;
+        }
+
+        const first = items[0];
+        currentServiceRef = reference;
+        currentServiceExpandedIndex = 0;
+        currentServiceStatus = normalizeServiceViewStatus(first.status);
+        currentServiceCancelReason = first.cancelReason || first.row?.dataset.cancelReason || "";
+        setSalesServiceProducts(reference, first.products || []);
+
+        if (salesServiceCustomer) {
+            salesServiceCustomer.textContent = first.customer === "Walk-In" ? "Pelanggan Walk-In" : first.customer;
+        }
+        if (salesServiceBranch) {
+            salesServiceBranch.textContent = first.location || "Star Salon";
+        }
+        if (salesServiceDate) {
+            salesServiceDate.textContent = formatServiceViewDate(first.date) || first.date;
+        }
+        if (salesServiceUpdated) {
+            salesServiceUpdated.textContent = `Terakhir diperbarui pada: ${formatServiceUpdatedAtValue(first.updatedAt || "-")}`;
+        }
+        if (salesServiceCount) {
+            salesServiceCount.textContent = `${items.length} Produk`;
+        }
+        if (salesServiceNotes) {
+            const cancelReason = (currentServiceCancelReason || "").trim();
+            const noteText = currentServiceStatus === "cancelled"
+                ? cancelReason
+                : (first.notes || "").trim();
+            salesServiceNotes.hidden = !noteText;
+            salesServiceNotes.textContent = noteText;
+        }
+        if (salesServiceTotal) {
+            const total = items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+            salesServiceTotal.textContent = `Total: ${formatServiceViewCurrency(total)}`;
+        }
+
+        hideSalesServiceStatusMenu();
+        hideSalesServiceMoreMenu();
+        closeSalesServiceProductPanel();
+        resetSalesServiceCancelForm();
+        renderSalesServiceStatus();
+        renderSalesServiceProductsSummary();
+        renderSalesServiceCards(items);
+        bootstrap.Modal.getOrCreateInstance(salesServiceViewModal).show();
+    };
+    const applyServicesFilters = () => {
+        const query = normalizeSalesValue(servicesSearchInput?.value);
+
+        servicesRows.forEach((row) => {
+            const staffId = row.dataset.staffId || "";
+            const rowDate = row.dataset.date || "";
+            const searchValue = normalizeSalesValue(row.dataset[`search${activeServicesSearchField.charAt(0).toUpperCase()}${activeServicesSearchField.slice(1)}`]);
+            const matchesStaff = activeServicesStaff === "all" || staffId === activeServicesStaff;
+            const matchesQuery = !query || searchValue.includes(query);
+            const matchesDate = (!activeServicesStartDate || rowDate >= activeServicesStartDate)
+                && (!activeServicesEndDate || rowDate <= activeServicesEndDate);
+            const isVisible = matchesStaff && matchesQuery && matchesDate;
+            row.dataset.paginationMatch = isVisible ? "1" : "0";
+        });
+
+        servicesPagination.syncMatches();
+    };
+    const downloadServicesSummary = (format) => {
+        const visibleRows = servicesRows.filter((row) => row.dataset.paginationMatch !== "0");
+        const lines = [
+            ["Ref No.", "Pelanggan", "Staff", "Nama Item", "Tanggal", "Waktu", "Durasi", "Lokasi", "Harga", "Status"].join(","),
+            ...visibleRows.map((row) => Array.from(row.children).map((cell) => `"${String(cell.textContent || "").trim().replace(/"/g, "\"\"")}"`).join(",")),
+        ];
+        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `services-sales.${format}`;
+        link.click();
+        URL.revokeObjectURL(url);
+    };
+    salesServiceStatusToggle?.addEventListener("click", () => {
+        if (!salesServiceStatusMenu || isSalesServiceFinalStatus(currentServiceStatus)) {
+            return;
+        }
+        hideSalesServiceMoreMenu();
+        salesServiceStatusMenu.hidden = !salesServiceStatusMenu.hidden;
+        salesServiceStatusToggle.setAttribute("aria-expanded", salesServiceStatusMenu.hidden ? "false" : "true");
+        renderSalesServiceStatus();
+    });
+    salesServiceStatusMenu?.querySelectorAll("[data-sales-service-status]").forEach((button) => {
+        button.addEventListener("click", async () => {
+            const nextStatus = button.dataset.salesServiceStatus || "new";
+            hideSalesServiceStatusMenu();
+            try {
+                await persistSalesServiceStatus(nextStatus);
+                reopenSalesServiceView(currentServiceRef, { showSavedToast: true });
+            } catch (error) {
+                window.alert(error instanceof Error ? error.message : "Gagal memperbarui status layanan.");
+            }
+        });
+    });
+    salesServiceMoreToggle?.addEventListener("click", () => {
+        if (!salesServiceMoreMenu) {
+            return;
+        }
+
+        hideSalesServiceStatusMenu();
+        salesServiceMoreMenu.hidden = !salesServiceMoreMenu.hidden;
+        salesServiceMoreToggle.setAttribute("aria-expanded", salesServiceMoreMenu.hidden ? "false" : "true");
+    });
+    salesServiceEditTrigger?.addEventListener("click", () => {
+        hideSalesServiceMoreMenu();
+        openCalendarAgendaEditor(currentServiceRef);
+    });
+    salesServiceAddProductTrigger?.addEventListener("click", () => {
+        openSalesServiceProductPanel();
+    });
+    salesServiceProductsEdit?.addEventListener("click", () => {
+        openSalesServiceProductPanel();
+    });
+    salesServiceProductClose?.addEventListener("click", () => {
+        closeSalesServiceProductPanel();
+    });
+    salesServiceProductCancel?.addEventListener("click", () => {
+        closeSalesServiceProductPanel();
+    });
+    salesServiceProductDone?.addEventListener("click", async () => {
+        try {
+            await persistSalesServiceProducts(cloneSalesServiceProducts(salesServiceDraftProducts));
+            closeSalesServiceProductPanel();
+            reopenSalesServiceView(currentServiceRef, { showSavedToast: true });
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal menyimpan produk layanan.");
+        }
+    });
+    salesServiceProductSearch?.addEventListener("input", () => {
+        showSalesServiceProductResults();
+    });
+    salesServiceProductSearch?.addEventListener("click", () => {
+        if (salesServiceProductDropdownOpen) {
+            hideSalesServiceProductResults();
+            return;
+        }
+        showSalesServiceProductResults();
+    });
+    salesServiceProductResults?.addEventListener("click", (event) => {
+        const target = event.target instanceof Element ? event.target.closest("[data-sales-service-product-id]") : null;
+        if (!target) {
+            return;
+        }
+        addSalesServiceProduct(target.getAttribute("data-sales-service-product-id") || "");
+    });
+    salesServiceProductBackdrop?.addEventListener("click", () => {
+        closeSalesServiceProductPanel();
+    });
+    salesServiceProductSelected?.addEventListener("click", (event) => {
+        const qtyButton = event.target instanceof Element ? event.target.closest("[data-sales-service-product-qty]") : null;
+        const row = event.target instanceof Element ? event.target.closest("[data-sales-service-selected-product]") : null;
+        if (!qtyButton || !row) {
+            return;
+        }
+        updateSalesServiceProductQty(
+            row.getAttribute("data-sales-service-selected-product") || "",
+            Number(qtyButton.getAttribute("data-sales-service-product-qty") || 0),
+        );
+    });
+    salesServiceNoShowTrigger?.addEventListener("click", () => {
+        hideSalesServiceMoreMenu();
+        if (salesServiceNoShowModal && typeof bootstrap !== "undefined") {
+            bootstrap.Modal.getOrCreateInstance(salesServiceNoShowModal).show();
+        }
+    });
+    salesServiceResetNoShowTrigger?.addEventListener("click", async () => {
+        hideSalesServiceMoreMenu();
+        try {
+            await persistSalesServiceStatus("new");
+            reopenSalesServiceView(currentServiceRef, { showSavedToast: true });
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal memperbarui status layanan.");
+        }
+    });
+    salesServiceCancelTrigger?.addEventListener("click", () => {
+        hideSalesServiceMoreMenu();
+        resetSalesServiceCancelForm();
+
+        if (salesServiceCancelReasonModal && typeof bootstrap !== "undefined") {
+            bootstrap.Modal.getOrCreateInstance(salesServiceCancelReasonModal).show();
+        }
+    });
+    salesServiceCancelReasonInputs.forEach((input) => {
+        input.addEventListener("change", () => {
+            updateSalesServiceCancelSubmit();
+        });
+    });
+    salesServiceCancelReasonForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const selected = salesServiceCancelReasonInputs.find((input) => input.checked);
+        if (!selected) {
+            updateSalesServiceCancelSubmit();
+            return;
+        }
+
+        try {
+            await persistSalesServiceStatus("cancelled", {
+                cancellationReason: selected.value,
+            });
+
+            if (salesServiceCancelReasonModal && typeof bootstrap !== "undefined") {
+                bootstrap.Modal.getOrCreateInstance(salesServiceCancelReasonModal).hide();
+            }
+            reopenSalesServiceView(currentServiceRef, { showSavedToast: true });
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal membatalkan agenda.");
+        }
+    });
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+        if (salesServiceStatusMenu && !target.closest(".sales-service-view__status-wrap")) {
+            hideSalesServiceStatusMenu();
+        }
+        if (salesServiceMoreMenu && !target.closest(".sales-service-view__more-wrap")) {
+            hideSalesServiceMoreMenu();
+        }
+        if (
+            salesServiceProductDropdownOpen
+            && salesServiceProductPanel
+            && !target.closest(".js-sales-service-product-search")
+            && !target.closest(".js-sales-service-product-results")
+        ) {
+            hideSalesServiceProductResults();
+        }
+    });
+    salesServiceViewModal?.addEventListener("hidden.bs.modal", () => {
+        const reopenRef = pendingServiceReopenRef;
+        const shouldShowSavedToast = pendingServiceSavedToast;
+        hideSalesServiceStatusMenu();
+        hideSalesServiceMoreMenu();
+        closeSalesServiceProductPanel();
+        currentServiceRef = "";
+        currentServiceCancelReason = "";
+        resetSalesServiceCancelForm();
+        pendingServiceReopenRef = "";
+        pendingServiceSavedToast = false;
+        if (reopenRef) {
+            window.setTimeout(() => {
+                if (shouldShowSavedToast) {
+                    showSalesServiceToast();
+                }
+                openSalesServiceView(reopenRef);
+            }, 180);
+        }
+    });
+    salesServiceCancelReasonModal?.addEventListener("hidden.bs.modal", () => {
+        salesServiceViewModal?.querySelector(".sales-service-view")?.classList.remove("is-muted");
+        resetSalesServiceCancelForm();
+    });
+    salesServiceCancelReasonModal?.addEventListener("show.bs.modal", () => {
+        salesServiceViewModal?.querySelector(".sales-service-view")?.classList.add("is-muted");
+    });
+    salesServiceNoShowModal?.addEventListener("show.bs.modal", () => {
+        salesServiceViewModal?.querySelector(".sales-service-view")?.classList.add("is-muted");
+    });
+    salesServiceNoShowModal?.addEventListener("hidden.bs.modal", () => {
+        salesServiceViewModal?.querySelector(".sales-service-view")?.classList.remove("is-muted");
+    });
+    salesServiceNoShowConfirm?.addEventListener("click", async () => {
+        try {
+            await persistSalesServiceStatus("no show");
+            if (salesServiceNoShowModal && typeof bootstrap !== "undefined") {
+                bootstrap.Modal.getOrCreateInstance(salesServiceNoShowModal).hide();
+            }
+            reopenSalesServiceView(currentServiceRef, { showSavedToast: true });
+        } catch (error) {
+            window.alert(error instanceof Error ? error.message : "Gagal mengubah status tidak hadir.");
+        }
+    });
+    salesServiceToastClose?.addEventListener("click", () => {
+        hideSalesServiceToast();
+    });
+    servicesRows.forEach((row) => {
+        row.querySelector(".js-sales-service-open")?.addEventListener("click", () => {
+            openSalesServiceView(row.dataset.ref || "");
+        });
+    });
+    const updateInvoicesRangeLabel = () => {
+        const presetLabel = activeInvoicesPreset === "today" ? "Hari ini"
+            : activeInvoicesPreset === "yesterday" ? "Kemarin"
+                : activeInvoicesPreset === "this_month" ? "Bulan ini"
+                    : activeInvoicesPreset === "7d" ? "7 hari sebelumnya"
+                        : activeInvoicesPreset === "30d" ? "30 hari sebelumnya"
+                            : activeInvoicesPreset === "last_month" ? "Bulan kemarin"
+                                : activeInvoicesPreset === "last_year" ? "Tahun kemarin"
+                                    : activeInvoicesPreset === "this_year" ? "Tahun ini"
+                                        : "7 hari sebelumnya";
+        const label = activeInvoicesStartDate && activeInvoicesEndDate
+            ? `${presetLabel}, ${formatShortDate(activeInvoicesStartDate)} - ${formatShortDate(activeInvoicesEndDate)}`
+            : presetLabel;
+        updateSalesDropdownLabel(invoicesRangeLabels, label);
+    };
+    const normalizeInvoiceStatus = (value) => {
+        const normalized = normalizeSalesValue(value);
+        if (normalized === "paid") {
+            return "PAID";
+        }
+        if (["void", "voided", "cancelled", "canceled"].includes(normalized)) {
+            return "VOIDED";
+        }
+        return "UNPAID";
+    };
+    const invoiceStatusClassName = (status) => {
+        if (status === "PAID") {
+            return "is-completed";
+        }
+        if (status === "VOIDED") {
+            return "is-voided";
+        }
+        return "is-started";
+    };
+    const applyInvoiceFilters = () => {
+        const query = normalizeSalesValue(invoicesSearchInput?.value);
+
+        invoiceRows.forEach((row) => {
+            const rowDate = row.dataset.date || "";
+            const searchValue = normalizeSalesValue(row.dataset[`search${activeInvoicesSearchField.charAt(0).toUpperCase()}${activeInvoicesSearchField.slice(1)}`]);
+            const matchesQuery = !query || searchValue.includes(query);
+            const matchesDate = (!activeInvoicesStartDate || rowDate >= activeInvoicesStartDate)
+                && (!activeInvoicesEndDate || rowDate <= activeInvoicesEndDate);
+            const isVisible = matchesQuery && matchesDate;
+            row.dataset.paginationMatch = isVisible ? "1" : "0";
+        });
+
+        invoicesPagination.syncMatches();
+    };
+    const downloadInvoicesSummary = (format) => {
+        const visibleRows = invoiceRows.filter((row) => row.dataset.paginationMatch !== "0");
+        const lines = [
+            ["Faktur", "Pelanggan", "Tanggal Faktur", "Lokasi", "Tips", "Pendapatan Kotor", "Status"].join(","),
+            ...visibleRows.map((row) => Array.from(row.children).map((cell) => `"${String(cell.textContent || "").trim().replace(/"/g, "\"\"")}"`).join(",")),
+        ];
+        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `sales-invoices.${format}`;
+        link.click();
+        URL.revokeObjectURL(url);
+    };
+    const updateVouchersRangeLabel = () => {
+        const presetLabel = activeVouchersPreset === "today" ? "Hari ini"
+            : activeVouchersPreset === "yesterday" ? "Kemarin"
+                : activeVouchersPreset === "this_month" ? "Bulan ini"
+                    : activeVouchersPreset === "7d" ? "7 hari sebelumnya"
+                        : activeVouchersPreset === "30d" ? "30 hari sebelumnya"
+                            : activeVouchersPreset === "last_month" ? "Bulan kemarin"
+                                : activeVouchersPreset === "last_year" ? "Tahun kemarin"
+                                    : activeVouchersPreset === "this_year" ? "Tahun ini"
+                                        : "30 hari sebelumnya";
+        const label = activeVouchersStartDate && activeVouchersEndDate
+            ? `Diterbitkan, ${formatShortDate(activeVouchersStartDate)} - ${formatShortDate(activeVouchersEndDate)}`
+            : presetLabel;
+        updateSalesDropdownLabel(vouchersRangeLabels, label);
+    };
+    const updateCashDrawerRangeLabel = () => {
+        const presetLabel = activeCashDrawerPreset === "today" ? "Hari ini"
+            : activeCashDrawerPreset === "yesterday" ? "Kemarin"
+                : activeCashDrawerPreset === "this_month" ? "Bulan ini"
+                    : activeCashDrawerPreset === "7d" ? "7 hari sebelumnya"
+                        : activeCashDrawerPreset === "30d" ? "30 hari sebelumnya"
+                            : activeCashDrawerPreset === "last_month" ? "Bulan kemarin"
+                                : activeCashDrawerPreset === "last_year" ? "Tahun kemarin"
+                                    : activeCashDrawerPreset === "this_year" ? "Tahun ini"
+                                        : "Tahun ini";
+        const label = activeCashDrawerStartDate && activeCashDrawerEndDate
+            ? `${presetLabel}, ${formatShortDate(activeCashDrawerStartDate)} - ${formatShortDate(activeCashDrawerEndDate)}`
+            : presetLabel;
+        updateSalesDropdownLabel(cashDrawerRangeLabels, label);
+    };
+    const moneyFromString = (value) => Number(String(value || "0").replace(/[^\d,-]/g, "").replace(/\./g, "").replace(",", ".")) || 0;
+    const formatRegisterMoney = (value) => `Rp ${Number(value || 0).toLocaleString("id-ID")},00`;
+    const applyVoucherFilters = () => {
+        const query = normalizeSalesValue(vouchersSearchInput?.value);
+
+        vouchersRows.forEach((row) => {
+            const rowDate = row.dataset.date || "";
+            const searchValue = normalizeSalesValue(row.dataset[`search${activeVouchersSearchField.charAt(0).toUpperCase()}${activeVouchersSearchField.slice(1)}`]);
+            const matchesQuery = !query || searchValue.includes(query);
+            const matchesDate = (!activeVouchersStartDate || rowDate >= activeVouchersStartDate)
+                && (!activeVouchersEndDate || rowDate <= activeVouchersEndDate);
+            const isVisible = matchesQuery && matchesDate;
+            row.dataset.paginationMatch = isVisible ? "1" : "0";
+        });
+
+        vouchersPagination.syncMatches();
+    };
+    const downloadVouchersSummary = (format) => {
+        const visibleRows = vouchersRows.filter((row) => row.dataset.paginationMatch !== "0");
+        const lines = [
+            ["Nama Voucher", "Kadaluarsa", "Faktur", "Pelanggan", "Kode", "Total", "Digunakan", "Tersisa", "Status"].join(","),
+            ...visibleRows.map((row) => Array.from(row.children).map((cell) => `"${String(cell.textContent || "").trim().replace(/"/g, "\"\"")}"`).join(",")),
+        ];
+        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `sales-vouchers.${format}`;
+        link.click();
+        URL.revokeObjectURL(url);
+    };
+    const applyRegisterTab = (tabName) => {
+        registerTabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.registerTab === tabName));
+        registerPanels.forEach((panel) => panel.classList.toggle("is-active", panel.dataset.registerPanel === tabName));
+    };
+    const renderRegisterDetail = (detail) => {
+        currentRegisterDetail = detail;
+        if (!registerView || !detail) {
+            return;
+        }
+
+        if (registerName) registerName.textContent = detail.staff || "Rayhan Doni Pramana";
+        if (registerAvatar) registerAvatar.textContent = String(detail.staff || "R").trim().charAt(0).toUpperCase() || "R";
+        if (registerMeta) {
+            registerMeta.innerHTML = `
+                <div>Dibuka pada: ${salesEscapeHtml(detail.opened_at || "-")}</div>
+                <div>Ditutup pada: ${salesEscapeHtml(detail.closed_at || "-")}${detail.closed_by ? ` Oleh ${salesEscapeHtml(detail.closed_by)}` : ""}</div>
+            `;
+        }
+        if (registerNote) registerNote.textContent = detail.note || "-";
+        if (registerStatus) {
+            registerStatus.textContent = detail.status || "Tutup";
+            registerStatus.className = `sales-status-pill js-sales-register-status ${normalizeSalesValue(detail.status) === "buka" ? "is-completed" : "is-started"}`;
+        }
+        if (registerExpected) registerExpected.textContent = formatRegisterMoney(detail.expected || 0);
+        if (registerActual) registerActual.textContent = formatRegisterMoney(detail.actual || 0);
+        if (registerDiff) registerDiff.textContent = formatRegisterMoney((detail.expected || 0) - (detail.actual || 0));
+        if (registerTransactions) {
+            registerTransactions.innerHTML = (detail.detail_rows || []).map((row) => `
+                <tr>
+                    <td>${salesEscapeHtml(row.datetime || "-")}</td>
+                    <td>${salesEscapeHtml(row.type || "-")}</td>
+                    <td>${salesEscapeHtml(row.payment || "-")}</td>
+                    <td>${salesEscapeHtml(row.author || "-")}</td>
+                    <td>${salesEscapeHtml(Number(row.amount || 0).toLocaleString("id-ID"))},00</td>
+                    <td>${salesEscapeHtml(row.note || "-")}</td>
+                </tr>
+            `).join("");
+        }
+        if (registerSummary) {
+            registerSummary.innerHTML = (detail.summary_rows || []).map((row) => `
+                <tr>
+                    <td>${salesEscapeHtml(row.label || "-")}</td>
+                    <td>${salesEscapeHtml(Number(row.value || 0).toLocaleString("id-ID"))},00</td>
+                </tr>
+            `).join("");
+        }
+        applyRegisterTab("transactions");
+        registerView.hidden = false;
+        document.body.classList.add("sales-register-open");
+    };
+    const closeRegisterDetail = () => {
+        if (!registerView) {
+            return;
+        }
+        registerView.hidden = true;
+        document.body.classList.remove("sales-register-open");
+    };
 
     const parseSalesInvoiceItems = (value) => {
         try {
@@ -4317,7 +7780,7 @@ function initSalesTabs() {
             time: row.dataset.time || "",
             location: row.dataset.location || row.children[3]?.textContent?.trim() || "Star Salon",
             gross,
-            status: (row.dataset.status || row.querySelector(".sales-status-pill")?.textContent || "PAID").trim().toUpperCase(),
+            status: normalizeInvoiceStatus(row.dataset.status || row.querySelector(".sales-status-pill")?.textContent || "PAID"),
             paymentMethod: row.dataset.paymentMethod || "CASH",
             items: items.length ? items : [{
                 name: "Penjualan",
@@ -4330,14 +7793,19 @@ function initSalesTabs() {
     };
 
     const renderSalesInvoice = (invoice) => {
-        const status = (invoice.status || "PAID").toUpperCase();
+        const status = normalizeInvoiceStatus(invoice.status || "PAID");
         const isPaid = status === "PAID";
+        const isVoided = status === "VOIDED";
         const items = Array.isArray(invoice.items) && invoice.items.length ? invoice.items : [];
         const subtotal = items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.qty || 1)), 0) || Number(invoice.gross || 0);
-        const remaining = isPaid ? 0 : subtotal;
+        const remaining = isPaid || isVoided ? 0 : subtotal;
         const invoiceLabel = String(invoice.invoice || "Faktur").replace(/^INV-/, "Faktur ");
         const createdLine = invoice.date ? `Dibuat pada ${salesEscapeHtml(invoice.date)}${invoice.time ? ` ${salesEscapeHtml(invoice.time)}` : ""}` : "Dibuat pada hari ini";
-        const paidLine = isPaid ? `Dilunasi pada ${salesEscapeHtml(invoice.date)}${invoice.time ? ` ${salesEscapeHtml(invoice.time)}` : ""}` : `Tanggal jatuh tempo faktur ${salesEscapeHtml(invoice.date || "")}`;
+        const paidLine = isPaid
+            ? `Dilunasi pada ${salesEscapeHtml(invoice.date)}${invoice.time ? ` ${salesEscapeHtml(invoice.time)}` : ""}`
+            : isVoided
+                ? `Faktur dibatalkan pada ${salesEscapeHtml(invoice.date || "")}${invoice.time ? ` ${salesEscapeHtml(invoice.time)}` : ""}`
+                : `Tanggal jatuh tempo faktur ${salesEscapeHtml(invoice.date || "")}`;
 
         if (salesInvoiceItems) {
             salesInvoiceItems.innerHTML = items.map((item) => {
@@ -4368,7 +7836,8 @@ function initSalesTabs() {
         }
         if (salesInvoiceStatus) {
             salesInvoiceStatus.textContent = status;
-            salesInvoiceStatus.classList.toggle("is-unpaid", !isPaid);
+            salesInvoiceStatus.classList.toggle("is-unpaid", !isPaid && !isVoided);
+            salesInvoiceStatus.classList.toggle("is-voided", isVoided);
         }
         if (salesInvoiceMeta) {
             salesInvoiceMeta.innerHTML = `
@@ -4422,13 +7891,16 @@ function initSalesTabs() {
         const gross = Number(invoice.gross || 0);
         const row = document.createElement("tr");
         row.className = "js-sales-paid-invoice-row js-sales-invoice-row";
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.setAttribute("aria-label", `Lihat faktur ${invoice.invoice || "11"}`);
         row.dataset.invoice = invoice.invoice || "11";
         row.dataset.customer = invoice.customer || "Walk-In";
         row.dataset.date = invoice.date || "";
         row.dataset.time = invoice.time || "";
         row.dataset.location = invoice.location || "Star Salon";
         row.dataset.gross = String(gross);
-        row.dataset.status = invoice.status || "PAID";
+        row.dataset.status = normalizeInvoiceStatus(invoice.status || "PAID");
         row.dataset.paymentMethod = invoice.paymentMethod || "CASH";
         row.dataset.items = JSON.stringify(invoice.items || []);
         row.innerHTML = `
@@ -4438,7 +7910,7 @@ function initSalesTabs() {
             <td>${salesEscapeHtml(invoice.location || "Star Salon")}</td>
             <td>${salesEscapeHtml(invoice.tips || "0,00")}</td>
             <td>${formatCurrency(gross)}</td>
-            <td><button class="sales-status-pill js-sales-invoice-open" type="button">${salesEscapeHtml(invoice.status || "PAID")}</button></td>
+            <td><button class="sales-status-pill js-sales-invoice-open ${invoiceStatusClassName(normalizeInvoiceStatus(invoice.status || "PAID"))}" type="button">${salesEscapeHtml(normalizeInvoiceStatus(invoice.status || "PAID"))}</button></td>
         `;
         invoiceRowsBody.prepend(row);
     };
@@ -4447,8 +7919,693 @@ function initSalesTabs() {
         tab.addEventListener("click", () => applyTab(tab.dataset.salesTab));
     });
 
+    dailyExportButtons.forEach((button) => {
+        button.addEventListener("click", () => downloadDailySummary(button.dataset.salesExport || "txt"));
+    });
+
+    servicesShopOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            const label = option.getAttribute("data-sales-services-shop-option") || "Star Salon";
+            updateSalesDropdownLabel(servicesShopLabels, label);
+            setSalesActiveOption(servicesShopOptions, label, "data-sales-services-shop-option");
+        });
+    });
+
+    servicesStaffOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeServicesStaff = option.getAttribute("data-sales-services-staff-option") || "all";
+            servicesStaffLabel && (servicesStaffLabel.textContent = option.textContent?.trim() || "Semua Staff");
+            setSalesActiveOption(servicesStaffOptions, activeServicesStaff, "data-sales-services-staff-option");
+            applyServicesFilters();
+        });
+    });
+
+    servicesSearchOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeServicesSearchField = option.getAttribute("data-sales-services-search-option") || "ref";
+            if (servicesSearchLabel) {
+                servicesSearchLabel.textContent = option.textContent?.trim() || "Ref No.";
+            }
+            setSalesActiveOption(servicesSearchOptions, activeServicesSearchField, "data-sales-services-search-option");
+            applyServicesFilters();
+        });
+    });
+
+    servicesSearchInput?.addEventListener("input", applyServicesFilters);
+
+    servicesExportButtons.forEach((button) => {
+        button.addEventListener("click", () => downloadServicesSummary(button.dataset.salesServicesExport || "csv"));
+    });
+
+    invoicesShopOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            const label = option.getAttribute("data-sales-invoices-shop-option") || "Star Salon";
+            updateSalesDropdownLabel(invoicesShopLabels, label);
+            setSalesActiveOption(invoicesShopOptions, label, "data-sales-invoices-shop-option");
+        });
+    });
+
+    invoicesSearchOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeInvoicesSearchField = option.getAttribute("data-sales-invoices-search-option") || "invoice";
+            if (invoicesSearchLabel) {
+                invoicesSearchLabel.textContent = option.textContent?.trim() || "Nomor Faktur";
+            }
+            setSalesActiveOption(invoicesSearchOptions, activeInvoicesSearchField, "data-sales-invoices-search-option");
+            applyInvoiceFilters();
+        });
+    });
+
+    invoicesSearchInput?.addEventListener("input", applyInvoiceFilters);
+    invoicesExportButtons.forEach((button) => {
+        button.addEventListener("click", () => downloadInvoicesSummary(button.dataset.salesInvoicesExport || "csv"));
+    });
+    invoicesBackdateInput?.addEventListener("change", () => applyInvoiceFilters());
+
+    vouchersSearchOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeVouchersSearchField = option.getAttribute("data-sales-vouchers-search-option") || "customer";
+            if (vouchersSearchLabel) {
+                vouchersSearchLabel.textContent = option.textContent?.trim() || "Nama Pelanggan";
+            }
+            setSalesActiveOption(vouchersSearchOptions, activeVouchersSearchField, "data-sales-vouchers-search-option");
+            applyVoucherFilters();
+        });
+    });
+
+    vouchersSearchInput?.addEventListener("input", applyVoucherFilters);
+    vouchersExportButtons.forEach((button) => {
+        button.addEventListener("click", () => downloadVouchersSummary(button.dataset.salesVouchersExport || "csv"));
+    });
+    vouchersRefresh?.addEventListener("click", () => {
+        window.location.href = "/sales?tab=vouchers";
+    });
+
+    registerTabs.forEach((tab) => {
+        tab.addEventListener("click", () => applyRegisterTab(tab.dataset.registerTab || "transactions"));
+    });
+    registerCloseButtons.forEach((button) => button.addEventListener("click", closeRegisterDetail));
+    registerDownload?.addEventListener("click", () => {
+        if (!currentRegisterDetail) {
+            return;
+        }
+        const lines = [
+            `Cash Register - ${currentRegisterDetail.staff || ""}`,
+            `Status: ${currentRegisterDetail.status || ""}`,
+            `Diharapkan: ${formatRegisterMoney(currentRegisterDetail.expected || 0)}`,
+            `Terhitung: ${formatRegisterMoney(currentRegisterDetail.actual || 0)}`,
+        ];
+        const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "cash-register-summary.pdf";
+        link.click();
+        URL.revokeObjectURL(url);
+    });
+    registerEmail?.addEventListener("click", () => {
+        if (!currentRegisterDetail) {
+            return;
+        }
+        const subject = encodeURIComponent(`Cash Register ${currentRegisterDetail.staff || ""}`);
+        const body = encodeURIComponent(`Status: ${currentRegisterDetail.status || ""}\nDiharapkan: ${formatRegisterMoney(currentRegisterDetail.expected || 0)}\nTerhitung: ${formatRegisterMoney(currentRegisterDetail.actual || 0)}`);
+        window.location.href = `mailto:?subject=${subject}&body=${body}`;
+    });
+    registerCorrection?.addEventListener("click", () => {
+        if (!currentRegisterDetail) {
+            return;
+        }
+        const corrected = window.prompt("Masukkan jumlah terhitung baru", String(currentRegisterDetail.actual || 0));
+        if (corrected == null) {
+            return;
+        }
+        currentRegisterDetail.actual = Number(corrected) || currentRegisterDetail.actual || 0;
+        renderRegisterDetail(currentRegisterDetail);
+    });
+    cashDrawerRows.forEach((row) => {
+        row.addEventListener("click", () => {
+            try {
+                renderRegisterDetail(JSON.parse(row.dataset.cashdrawer || "{}"));
+            } catch (error) {
+                renderRegisterDetail(null);
+            }
+        });
+    });
+
+    const servicesDateModal = document.getElementById("salesServicesDateFilterModal");
+    if (servicesDateModal) {
+        const startInput = servicesDateModal.querySelector(".js-sales-services-start");
+        const endInput = servicesDateModal.querySelector(".js-sales-services-end");
+        const rangeInput = servicesDateModal.querySelector(".js-sales-services-date-range");
+        const resetBtn = servicesDateModal.querySelector(".js-sales-services-date-reset");
+        const applyBtn = servicesDateModal.querySelector(".js-sales-services-date-apply");
+        const presetButtons = Array.from(servicesDateModal.querySelectorAll(".js-sales-services-date-preset"));
+        const modalInstance = typeof bootstrap !== "undefined" ? bootstrap.Modal.getOrCreateInstance(servicesDateModal) : null;
+        let fp = null;
+        const today = new Date();
+        const formatYmdLocal = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        };
+        const setRange = (start, end) => {
+            if (startInput) startInput.value = start || "";
+            if (endInput) endInput.value = end || "";
+            if (fp) {
+                fp.setDate([start, end].filter(Boolean), false, "Y-m-d");
+            }
+        };
+        const syncPresets = () => {
+            presetButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.preset === activeServicesPreset);
+            });
+        };
+        const applyRange = ({ closeModal = true } = {}) => {
+            activeServicesStartDate = startInput?.value || "";
+            activeServicesEndDate = endInput?.value || "";
+            updateServicesRangeLabel();
+            applyServicesFilters();
+            if (closeModal) {
+                modalInstance?.hide();
+            }
+        };
+
+        if (rangeInput && typeof flatpickr !== "undefined") {
+            fp = flatpickr(rangeInput, {
+                mode: "range",
+                inline: true,
+                dateFormat: "Y-m-d",
+                defaultDate: [startInput?.value, endInput?.value].filter(Boolean),
+                onChange: (selectedDates) => {
+                    const [start, end] = selectedDates;
+                    if (startInput) startInput.value = start ? formatYmdLocal(start) : "";
+                    if (endInput) endInput.value = end ? formatYmdLocal(end) : "";
+                },
+            });
+        }
+
+        presetButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                activeServicesPreset = button.dataset.preset || "last_month";
+                const start = new Date(today);
+                const end = new Date(today);
+                if (activeServicesPreset === "today") {
+                    // no-op
+                } else if (activeServicesPreset === "yesterday") {
+                    start.setDate(today.getDate() - 1);
+                    end.setDate(today.getDate() - 1);
+                } else if (activeServicesPreset === "7d") {
+                    start.setDate(today.getDate() - 6);
+                } else if (activeServicesPreset === "30d" || activeServicesPreset === "last_month") {
+                    start.setDate(today.getDate() - 30);
+                } else if (activeServicesPreset === "this_month") {
+                    start.setDate(1);
+                } else if (activeServicesPreset === "last_year") {
+                    start.setFullYear(today.getFullYear() - 1, 0, 1);
+                    end.setFullYear(today.getFullYear() - 1, 11, 31);
+                } else if (activeServicesPreset === "this_year") {
+                    start.setMonth(0, 1);
+                }
+
+                setRange(formatYmdLocal(start), formatYmdLocal(end));
+                syncPresets();
+                applyRange();
+            });
+        });
+
+        startInput?.addEventListener("change", () => setRange(startInput.value, endInput?.value || ""));
+        endInput?.addEventListener("change", () => setRange(startInput?.value || "", endInput.value));
+        resetBtn?.addEventListener("click", () => {
+            activeServicesPreset = "last_month";
+            const start = new Date(today);
+            start.setDate(today.getDate() - 30);
+            setRange(formatYmdLocal(start), formatYmdLocal(today));
+            syncPresets();
+        });
+        applyBtn?.addEventListener("click", () => applyRange());
+
+        activeServicesStartDate = startInput?.value || "";
+        activeServicesEndDate = endInput?.value || "";
+        updateServicesRangeLabel();
+        syncPresets();
+        applyServicesFilters();
+        servicesDateModal.addEventListener("shown.bs.modal", () => {
+            fp?.redraw();
+        });
+    } else {
+        applyServicesFilters();
+    }
+
+    const invoicesDateModal = document.getElementById("salesInvoicesDateFilterModal");
+    if (invoicesDateModal) {
+        const startInput = invoicesDateModal.querySelector(".js-sales-invoices-start");
+        const endInput = invoicesDateModal.querySelector(".js-sales-invoices-end");
+        const rangeInput = invoicesDateModal.querySelector(".js-sales-invoices-date-range");
+        const resetBtn = invoicesDateModal.querySelector(".js-sales-invoices-date-reset");
+        const applyBtn = invoicesDateModal.querySelector(".js-sales-invoices-date-apply");
+        const presetButtons = Array.from(invoicesDateModal.querySelectorAll(".js-sales-invoices-date-preset"));
+        const modalInstance = typeof bootstrap !== "undefined" ? bootstrap.Modal.getOrCreateInstance(invoicesDateModal) : null;
+        let fp = null;
+        const today = new Date();
+        const formatYmdLocal = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        };
+        const setRange = (start, end) => {
+            if (startInput) startInput.value = start || "";
+            if (endInput) endInput.value = end || "";
+            if (fp) {
+                fp.setDate([start, end].filter(Boolean), false, "Y-m-d");
+            }
+        };
+        const syncPresets = () => {
+            presetButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.preset === activeInvoicesPreset);
+            });
+        };
+        const applyRange = ({ closeModal = true } = {}) => {
+            activeInvoicesStartDate = startInput?.value || "";
+            activeInvoicesEndDate = endInput?.value || "";
+            updateInvoicesRangeLabel();
+            applyInvoiceFilters();
+            if (closeModal) {
+                modalInstance?.hide();
+            }
+        };
+
+        if (rangeInput && typeof flatpickr !== "undefined") {
+            fp = flatpickr(rangeInput, {
+                mode: "range",
+                inline: true,
+                dateFormat: "Y-m-d",
+                defaultDate: [startInput?.value, endInput?.value].filter(Boolean),
+                onChange: (selectedDates) => {
+                    const [start, end] = selectedDates;
+                    if (startInput) startInput.value = start ? formatYmdLocal(start) : "";
+                    if (endInput) endInput.value = end ? formatYmdLocal(end) : "";
+                },
+            });
+        }
+
+        presetButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                activeInvoicesPreset = button.dataset.preset || "7d";
+                const start = new Date(today);
+                const end = new Date(today);
+                if (activeInvoicesPreset === "today") {
+                    // no-op
+                } else if (activeInvoicesPreset === "yesterday") {
+                    start.setDate(today.getDate() - 1);
+                    end.setDate(today.getDate() - 1);
+                } else if (activeInvoicesPreset === "7d") {
+                    start.setDate(today.getDate() - 6);
+                } else if (activeInvoicesPreset === "30d") {
+                    start.setDate(today.getDate() - 29);
+                } else if (activeInvoicesPreset === "this_month") {
+                    start.setDate(1);
+                } else if (activeInvoicesPreset === "last_month") {
+                    start.setMonth(today.getMonth() - 1, 1);
+                    end.setMonth(today.getMonth(), 0);
+                } else if (activeInvoicesPreset === "last_year") {
+                    start.setFullYear(today.getFullYear() - 1, 0, 1);
+                    end.setFullYear(today.getFullYear() - 1, 11, 31);
+                } else if (activeInvoicesPreset === "this_year") {
+                    start.setMonth(0, 1);
+                }
+
+                setRange(formatYmdLocal(start), formatYmdLocal(end));
+                syncPresets();
+                applyRange();
+            });
+        });
+
+        startInput?.addEventListener("change", () => setRange(startInput.value, endInput?.value || ""));
+        endInput?.addEventListener("change", () => setRange(startInput?.value || "", endInput.value));
+        resetBtn?.addEventListener("click", () => {
+            activeInvoicesPreset = "7d";
+            const start = new Date(today);
+            start.setDate(today.getDate() - 6);
+            setRange(formatYmdLocal(start), formatYmdLocal(today));
+            syncPresets();
+        });
+        applyBtn?.addEventListener("click", () => applyRange());
+
+        activeInvoicesStartDate = startInput?.value || "";
+        activeInvoicesEndDate = endInput?.value || "";
+        updateInvoicesRangeLabel();
+        syncPresets();
+        applyInvoiceFilters();
+        invoicesDateModal.addEventListener("shown.bs.modal", () => {
+            fp?.redraw();
+        });
+    } else {
+        applyInvoiceFilters();
+    }
+
+    const vouchersDateModal = document.getElementById("salesVouchersDateFilterModal");
+    if (vouchersDateModal) {
+        const startInput = vouchersDateModal.querySelector(".js-sales-vouchers-start");
+        const endInput = vouchersDateModal.querySelector(".js-sales-vouchers-end");
+        const rangeInput = vouchersDateModal.querySelector(".js-sales-vouchers-date-range");
+        const resetBtn = vouchersDateModal.querySelector(".js-sales-vouchers-date-reset");
+        const applyBtn = vouchersDateModal.querySelector(".js-sales-vouchers-date-apply");
+        const presetButtons = Array.from(vouchersDateModal.querySelectorAll(".js-sales-vouchers-date-preset"));
+        const modalInstance = typeof bootstrap !== "undefined" ? bootstrap.Modal.getOrCreateInstance(vouchersDateModal) : null;
+        let fp = null;
+        const today = new Date();
+        const formatYmdLocal = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        };
+        const setRange = (start, end) => {
+            if (startInput) startInput.value = start || "";
+            if (endInput) endInput.value = end || "";
+            if (fp) {
+                fp.setDate([start, end].filter(Boolean), false, "Y-m-d");
+            }
+        };
+        const syncPresets = () => {
+            presetButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.preset === activeVouchersPreset);
+            });
+        };
+        const applyRange = ({ closeModal = true } = {}) => {
+            activeVouchersStartDate = startInput?.value || "";
+            activeVouchersEndDate = endInput?.value || "";
+            updateVouchersRangeLabel();
+            applyVoucherFilters();
+            if (closeModal) {
+                modalInstance?.hide();
+            }
+        };
+
+        if (rangeInput && typeof flatpickr !== "undefined") {
+            fp = flatpickr(rangeInput, {
+                mode: "range",
+                inline: true,
+                dateFormat: "Y-m-d",
+                defaultDate: [startInput?.value, endInput?.value].filter(Boolean),
+                onChange: (selectedDates) => {
+                    const [start, end] = selectedDates;
+                    if (startInput) startInput.value = start ? formatYmdLocal(start) : "";
+                    if (endInput) endInput.value = end ? formatYmdLocal(end) : "";
+                },
+            });
+        }
+
+        presetButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                activeVouchersPreset = button.dataset.preset || "30d";
+                const start = new Date(today);
+                const end = new Date(today);
+                if (activeVouchersPreset === "today") {
+                    // no-op
+                } else if (activeVouchersPreset === "yesterday") {
+                    start.setDate(today.getDate() - 1);
+                    end.setDate(today.getDate() - 1);
+                } else if (activeVouchersPreset === "7d") {
+                    start.setDate(today.getDate() - 6);
+                } else if (activeVouchersPreset === "30d") {
+                    start.setDate(today.getDate() - 29);
+                } else if (activeVouchersPreset === "this_month") {
+                    start.setDate(1);
+                } else if (activeVouchersPreset === "last_month") {
+                    start.setMonth(today.getMonth() - 1, 1);
+                    end.setMonth(today.getMonth(), 0);
+                } else if (activeVouchersPreset === "last_year") {
+                    start.setFullYear(today.getFullYear() - 1, 0, 1);
+                    end.setFullYear(today.getFullYear() - 1, 11, 31);
+                } else if (activeVouchersPreset === "this_year") {
+                    start.setMonth(0, 1);
+                }
+
+                setRange(formatYmdLocal(start), formatYmdLocal(end));
+                syncPresets();
+                applyRange();
+            });
+        });
+
+        startInput?.addEventListener("change", () => setRange(startInput.value, endInput?.value || ""));
+        endInput?.addEventListener("change", () => setRange(startInput?.value || "", endInput.value));
+        resetBtn?.addEventListener("click", () => {
+            activeVouchersPreset = "30d";
+            const start = new Date(today);
+            start.setDate(today.getDate() - 29);
+            setRange(formatYmdLocal(start), formatYmdLocal(today));
+            syncPresets();
+        });
+        applyBtn?.addEventListener("click", () => applyRange());
+
+        activeVouchersStartDate = startInput?.value || "";
+        activeVouchersEndDate = endInput?.value || "";
+        updateVouchersRangeLabel();
+        syncPresets();
+        applyVoucherFilters();
+        vouchersDateModal.addEventListener("shown.bs.modal", () => {
+            fp?.redraw();
+        });
+    } else {
+        applyVoucherFilters();
+    }
+
+    const cashDrawerDateModal = document.getElementById("salesCashDrawerDateFilterModal");
+    if (cashDrawerDateModal) {
+        const startInput = cashDrawerDateModal.querySelector(".js-sales-cashdrawer-start");
+        const endInput = cashDrawerDateModal.querySelector(".js-sales-cashdrawer-end");
+        const rangeInput = cashDrawerDateModal.querySelector(".js-sales-cashdrawer-date-range");
+        const resetBtn = cashDrawerDateModal.querySelector(".js-sales-cashdrawer-date-reset");
+        const applyBtn = cashDrawerDateModal.querySelector(".js-sales-cashdrawer-date-apply");
+        const presetButtons = Array.from(cashDrawerDateModal.querySelectorAll(".js-sales-cashdrawer-date-preset"));
+        const modalInstance = typeof bootstrap !== "undefined" ? bootstrap.Modal.getOrCreateInstance(cashDrawerDateModal) : null;
+        let fp = null;
+        const today = new Date();
+        const formatYmdLocal = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        };
+        const setRange = (start, end) => {
+            if (startInput) startInput.value = start || "";
+            if (endInput) endInput.value = end || "";
+            if (fp) {
+                fp.setDate([start, end].filter(Boolean), false, "Y-m-d");
+            }
+        };
+        const syncPresets = () => {
+            presetButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.preset === activeCashDrawerPreset);
+            });
+        };
+        const applyRange = ({ closeModal = true } = {}) => {
+            activeCashDrawerStartDate = startInput?.value || "";
+            activeCashDrawerEndDate = endInput?.value || "";
+            updateCashDrawerRangeLabel();
+            if (closeModal) {
+                modalInstance?.hide();
+            }
+        };
+        if (rangeInput && typeof flatpickr !== "undefined") {
+            fp = flatpickr(rangeInput, {
+                mode: "range",
+                inline: true,
+                dateFormat: "Y-m-d",
+                defaultDate: [startInput?.value, endInput?.value].filter(Boolean),
+                onChange: (selectedDates) => {
+                    const [start, end] = selectedDates;
+                    if (startInput) startInput.value = start ? formatYmdLocal(start) : "";
+                    if (endInput) endInput.value = end ? formatYmdLocal(end) : "";
+                },
+            });
+        }
+        presetButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                activeCashDrawerPreset = button.dataset.preset || "this_year";
+                const start = new Date(today);
+                const end = new Date(today);
+                if (activeCashDrawerPreset === "today") {
+                    // no-op
+                } else if (activeCashDrawerPreset === "yesterday") {
+                    start.setDate(today.getDate() - 1);
+                    end.setDate(today.getDate() - 1);
+                } else if (activeCashDrawerPreset === "7d") {
+                    start.setDate(today.getDate() - 6);
+                } else if (activeCashDrawerPreset === "30d") {
+                    start.setDate(today.getDate() - 29);
+                } else if (activeCashDrawerPreset === "this_month") {
+                    start.setDate(1);
+                } else if (activeCashDrawerPreset === "last_month") {
+                    start.setMonth(today.getMonth() - 1, 1);
+                    end.setMonth(today.getMonth(), 0);
+                } else if (activeCashDrawerPreset === "last_year") {
+                    start.setFullYear(today.getFullYear() - 1, 0, 1);
+                    end.setFullYear(today.getFullYear() - 1, 11, 31);
+                } else if (activeCashDrawerPreset === "this_year") {
+                    start.setMonth(0, 1);
+                }
+                setRange(formatYmdLocal(start), formatYmdLocal(end));
+                syncPresets();
+                applyRange();
+            });
+        });
+        resetBtn?.addEventListener("click", () => {
+            activeCashDrawerPreset = "this_year";
+            const start = new Date(today);
+            start.setMonth(0, 1);
+            setRange(formatYmdLocal(start), formatYmdLocal(today));
+            syncPresets();
+        });
+        applyBtn?.addEventListener("click", () => applyRange());
+        activeCashDrawerStartDate = startInput?.value || "";
+        activeCashDrawerEndDate = endInput?.value || "";
+        updateCashDrawerRangeLabel();
+        syncPresets();
+    }
+
+    openRegisterSave?.addEventListener("click", () => {
+        const amount = moneyFromString(openRegisterAmount?.value || "0");
+        const note = openRegisterNote?.value?.trim() || "-";
+        const tbody = shell.querySelector('[data-sales-panel="cash-drawer"] tbody');
+        if (!tbody) {
+            return;
+        }
+
+        const detail = {
+            id: `drawer-${Date.now()}`,
+            date: new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true }).replace(",", ""),
+            staff: "Rayhan Doni Pramana",
+            expected: amount,
+            actual: 0,
+            status: "Buka",
+            opened_at: new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true }).replace(",", ""),
+            closed_at: "",
+            closed_by: "",
+            note,
+            detail_rows: [{
+                datetime: new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true }).replace(",", ""),
+                type: "Open Register",
+                payment: "-",
+                author: "Rayhan Doni Pramana",
+                amount,
+                note,
+            }],
+            summary_rows: [
+                { label: "Total kas masuk", value: amount },
+                { label: "Total kas terhitung", value: 0 },
+                { label: "Selisih register", value: amount },
+            ],
+        };
+
+        const row = document.createElement("tr");
+        row.className = "js-sales-cashdrawer-row";
+        row.dataset.cashdrawer = JSON.stringify(detail);
+        row.innerHTML = `
+            <td>${salesEscapeHtml(detail.date)}</td>
+            <td>${salesEscapeHtml(detail.staff)}</td>
+            <td>${Number(detail.expected).toLocaleString("id-ID")},00</td>
+            <td>${Number(detail.actual).toLocaleString("id-ID")},00</td>
+            <td><span class="sales-status-pill is-completed">Buka</span></td>
+        `;
+        row.addEventListener("click", () => renderRegisterDetail(JSON.parse(row.dataset.cashdrawer || "{}")));
+        tbody.prepend(row);
+
+        if (typeof bootstrap !== "undefined" && openRegisterModal) {
+            bootstrap.Modal.getOrCreateInstance(openRegisterModal).hide();
+        }
+        if (openRegisterAmount) openRegisterAmount.value = "Rp 0";
+        if (openRegisterNote) openRegisterNote.value = "";
+    });
+
+    dateModeInput?.addEventListener("change", () => {
+        if (dateModeLabel) {
+            dateModeLabel.textContent = dateModeInput.checked
+                ? "Berdasarkan tanggal pembayaran"
+                : "Berdasarkan tanggal invoice";
+        }
+    });
+
+    dateButton?.addEventListener("click", () => {
+        if (typeof datePicker?.showPicker === "function") {
+            datePicker.showPicker();
+            return;
+        }
+
+        datePicker?.click();
+    });
+
+    datePicker?.addEventListener("change", () => {
+        if (dateButtonLabel) {
+            dateButtonLabel.textContent = formatLongDate(datePicker.value);
+        }
+    });
+
+    summaryModeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            if (!summaryModal) {
+                return;
+            }
+
+            summaryModal.dataset.summaryMode = button.dataset.summaryMode || "register";
+            renderSummaryReceipt();
+        });
+    });
+
+    summaryItemsInput?.addEventListener("change", renderSummaryReceipt);
+
+    summaryModal?.addEventListener("show.bs.modal", () => {
+        summaryModal.dataset.summaryMode = "register";
+        if (summaryItemsInput) {
+            summaryItemsInput.checked = false;
+        }
+        renderSummaryReceipt();
+    });
+
+    summaryPrintButton?.addEventListener("click", () => {
+        if (!summaryReceipt) {
+            return;
+        }
+
+        const printWindow = window.open("", "_blank", "width=760,height=900");
+        if (!printWindow) {
+            return;
+        }
+
+        printWindow.document.write(`
+            <html>
+                <head>
+                    <title>Cetak Ringkasan</title>
+                    <style>
+                        body { font-family: "Courier New", monospace; padding: 24px; }
+                        pre { white-space: pre-wrap; font-size: 18px; line-height: 1.45; }
+                    </style>
+                </head>
+                <body><pre>${salesEscapeHtml(summaryReceipt.textContent || "")}</pre></body>
+            </html>
+        `);
+        printWindow.document.close();
+        printWindow.focus();
+        printWindow.print();
+    });
+
     fab?.addEventListener("click", () => {
-        fabMenu?.classList.toggle("is-open");
+        const targetUrl = new URL(calendarUrl, window.location.origin);
+        targetUrl.searchParams.set("modal", "agenda");
+
+        if (activeSalesTab === "invoices") {
+            targetUrl.searchParams.set("entry", "sales");
+            targetUrl.searchParams.set("agenda_title", "Penjualan Baru");
+            targetUrl.searchParams.set("source", "sales-invoices");
+        } else {
+            targetUrl.searchParams.set("entry", "agenda");
+            targetUrl.searchParams.set("source", "sales-services");
+        }
+
+        window.location.href = targetUrl.toString();
     });
 
     document.addEventListener("click", (event) => {
@@ -4464,20 +8621,104 @@ function initSalesTabs() {
         fabMenu.classList.remove("is-open");
     });
 
+    const openSalesInvoiceFromRow = (row) => {
+        if (!row) {
+            return;
+        }
+        renderSalesInvoice(readSalesInvoiceFromRow(row));
+    };
+    const copySalesText = async (text) => {
+        if (!text) {
+            return false;
+        }
+
+        if (navigator.clipboard?.writeText) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch (_error) {
+            }
+        }
+
+        const field = document.createElement("textarea");
+        field.value = text;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        field.select();
+        const copied = document.execCommand("copy");
+        field.remove();
+        return copied;
+    };
+
     invoiceRowsBody?.addEventListener("click", (event) => {
-        const button = event.target.closest(".js-sales-invoice-open");
-        if (!button) {
+        const target = event.target;
+        if (!(target instanceof Element)) {
             return;
         }
 
-        event.preventDefault();
+        if (target.closest(".js-sales-customer-link")) {
+            return;
+        }
 
-        const row = button.closest(".js-sales-invoice-row");
+        const row = target.closest(".js-sales-invoice-row");
         if (!row) {
             return;
         }
 
-        renderSalesInvoice(readSalesInvoiceFromRow(row));
+        event.preventDefault();
+        openSalesInvoiceFromRow(row);
+    });
+
+    invoiceRowsBody?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+            return;
+        }
+
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        if (target.closest(".js-sales-customer-link")) {
+            return;
+        }
+
+        const row = target.closest(".js-sales-invoice-row");
+        if (!row) {
+            return;
+        }
+
+        event.preventDefault();
+        openSalesInvoiceFromRow(row);
+    });
+    vouchersRows.forEach((row) => {
+        row.querySelector(".js-sales-voucher-invoice-open")?.addEventListener("click", (event) => {
+            event.preventDefault();
+            openSalesInvoiceFromRow(row);
+        });
+        row.querySelector(".js-sales-voucher-code-copy")?.addEventListener("click", async (event) => {
+            event.preventDefault();
+            const button = event.currentTarget;
+            if (!(button instanceof HTMLElement)) {
+                return;
+            }
+            const copied = await copySalesText((button.dataset.copyText || "").trim());
+            if (!copied) {
+                return;
+            }
+            const icon = button.querySelector("i");
+            const originalClass = icon?.className || "bi bi-copy";
+            if (icon) {
+                icon.className = "bi bi-check2";
+            }
+            window.setTimeout(() => {
+                if (icon) {
+                    icon.className = originalClass;
+                }
+            }, 1200);
+        });
     });
 
     salesInvoiceCloseButtons.forEach((button) => {
@@ -4509,6 +8750,7 @@ function initSalesTabs() {
     });
 
     injectPaidInvoiceRow();
+    renderSummaryReceipt();
     const requestedTab = new URLSearchParams(window.location.search).get("tab");
     const initialTab = tabs.some((tab) => tab.dataset.salesTab === requestedTab) ? requestedTab : "daily";
     applyTab(initialTab);
@@ -4583,9 +8825,19 @@ function initCustomerToolbar(shell) {
     }
 
     const tbody = table.querySelector("tbody");
+    const tableCard = table.closest(".customers-table-card");
     const searchInput = shell.querySelector(".js-customer-search");
     const tagToggleLabel = shell.querySelector(".js-customer-tag-label");
     const sortToggleLabel = shell.querySelector(".js-customer-sort-label");
+    const paginationFooter = shell.querySelector('[data-sales-pagination="customers"]');
+    const paginationTotal = paginationFooter?.querySelector(".js-customers-total");
+    const paginationToggle = paginationFooter?.querySelector("[data-customers-page-size-toggle]");
+    const paginationMenu = paginationFooter?.querySelector("[data-customers-page-size-menu]");
+    const paginationPrev = paginationFooter?.querySelector("[data-customers-page-prev]");
+    const paginationNext = paginationFooter?.querySelector("[data-customers-page-next]");
+    const paginationList = paginationFooter?.querySelector("[data-customers-page-list]");
+    const paginationInput = paginationFooter?.querySelector("[data-customers-page-input]");
+    const paginationTop = paginationFooter?.querySelector("[data-customers-page-top]");
 
     const normalize = (value) => (value || "").toString().toLowerCase();
     const parseDate = (value) => {
@@ -4627,6 +8879,10 @@ function initCustomerToolbar(shell) {
             status: dataset.customerStatus || "Aktif",
             notes: dataset.customerNotes || "",
             address: dataset.customerAddress || "",
+            familyCardNumber: dataset.customerFamilyCardNumber || "",
+            passportNumber: dataset.customerPassportNumber || "",
+            notifyVia: dataset.customerNotifyVia || "off",
+            marketingOptIn: dataset.customerMarketingOptIn === "1",
         };
     });
 
@@ -4637,6 +8893,123 @@ function initCustomerToolbar(shell) {
         sortLabel: "Nama",
         birthStart: "",
         birthEnd: "",
+        currentPage: 1,
+        pageSize: 20,
+    };
+    const pageSizeOptions = [10, 20, 30, 50];
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
+    const apiRequest = async (url, options = {}) => {
+        const response = await fetch(url, {
+            credentials: "same-origin",
+            ...options,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || "Permintaan customer gagal diproses.");
+        }
+        return payload;
+    };
+
+    const getMatchedRows = () => rows.filter((row) => row.tr.dataset.paginationMatch !== "0");
+
+    const closePageSizeMenu = () => {
+        if (!paginationMenu || !paginationFooter) {
+            return;
+        }
+        paginationMenu.hidden = true;
+        paginationFooter.classList.remove("is-page-size-open");
+        paginationToggle?.setAttribute("aria-expanded", "false");
+    };
+
+    const renderPageSizeMenu = () => {
+        if (!paginationMenu) {
+            return;
+        }
+
+        paginationMenu.innerHTML = pageSizeOptions.map((option) => `
+            <button type="button" class="sales-pagination__page-size-option${option === state.pageSize ? " is-active" : ""}" data-customers-page-size-option="${option}">
+                ${option}/page
+            </button>
+        `).join("");
+
+        paginationMenu.querySelectorAll("[data-customers-page-size-option]").forEach((button) => {
+            button.addEventListener("click", () => {
+                state.pageSize = Number(button.getAttribute("data-customers-page-size-option") || 20);
+                state.currentPage = 1;
+                refreshPagination();
+                closePageSizeMenu();
+            });
+        });
+    };
+
+    const openPageSizeMenu = () => {
+        if (!paginationMenu || !paginationFooter) {
+            return;
+        }
+        renderPageSizeMenu();
+        paginationMenu.hidden = false;
+        paginationFooter.classList.add("is-page-size-open");
+        paginationToggle?.setAttribute("aria-expanded", "true");
+    };
+
+    const renderPageButtons = (pageCount) => {
+        if (!paginationList) {
+            return;
+        }
+
+        const maxButtons = 5;
+        const startPage = Math.max(1, Math.min(state.currentPage - 2, pageCount - maxButtons + 1));
+        const endPage = Math.min(pageCount, startPage + maxButtons - 1);
+        paginationList.innerHTML = "";
+
+        for (let page = startPage; page <= endPage; page += 1) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = `sales-pagination__page${page === state.currentPage ? " is-active" : ""}`;
+            button.textContent = String(page);
+            button.addEventListener("click", () => {
+                state.currentPage = page;
+                refreshPagination();
+            });
+            paginationList.appendChild(button);
+        }
+    };
+
+    const refreshPagination = () => {
+        const matchedRows = getMatchedRows();
+        const totalCount = matchedRows.length;
+        const pageCount = Math.max(1, Math.ceil(totalCount / state.pageSize));
+        state.currentPage = Math.min(Math.max(1, state.currentPage), pageCount);
+        const startIndex = (state.currentPage - 1) * state.pageSize;
+        const endIndex = startIndex + state.pageSize;
+
+        rows.forEach((row) => {
+            const matchedIndex = matchedRows.indexOf(row);
+            const isVisible = matchedIndex >= startIndex && matchedIndex < endIndex;
+            row.tr.hidden = matchedIndex === -1 || !isVisible;
+        });
+
+        if (paginationTotal) {
+            paginationTotal.textContent = String(totalCount);
+        }
+
+        if (paginationToggle) {
+            paginationToggle.innerHTML = `${state.pageSize}/page <i class="bi bi-chevron-${paginationMenu?.hidden === false ? "up" : "down"}"></i>`;
+        }
+
+        if (paginationPrev) {
+            paginationPrev.disabled = state.currentPage <= 1;
+        }
+
+        if (paginationNext) {
+            paginationNext.disabled = state.currentPage >= pageCount || totalCount === 0;
+        }
+
+        if (paginationInput) {
+            paginationInput.value = String(state.currentPage);
+        }
+
+        renderPageButtons(pageCount);
     };
 
     const matches = (row) => {
@@ -4690,16 +9063,15 @@ function initCustomerToolbar(shell) {
         const active = [];
         const inactive = [];
         rows.forEach((row) => {
-            (matches(row) ? active : inactive).push(row);
+            const isMatch = matches(row);
+            row.tr.dataset.paginationMatch = isMatch ? "1" : "0";
+            (isMatch ? active : inactive).push(row);
         });
 
         const ordered = sortRows(active).concat(inactive);
-        ordered.forEach((row) => {
-            row.tr.style.display = matches(row) ? "" : "none";
-        });
-
-        // Reorder DOM to keep sorting consistent without losing hidden rows.
         ordered.forEach((row) => tbody.appendChild(row.tr));
+        state.currentPage = 1;
+        refreshPagination();
     };
 
     searchInput?.addEventListener("input", () => {
@@ -4731,6 +9103,66 @@ function initCustomerToolbar(shell) {
             apply();
         });
     });
+
+    paginationToggle?.addEventListener("click", () => {
+        if (paginationMenu?.hidden === false) {
+            closePageSizeMenu();
+            refreshPagination();
+            return;
+        }
+        openPageSizeMenu();
+        refreshPagination();
+    });
+
+    paginationPrev?.addEventListener("click", () => {
+        state.currentPage = Math.max(1, state.currentPage - 1);
+        refreshPagination();
+    });
+
+    paginationNext?.addEventListener("click", () => {
+        const pageCount = Math.max(1, Math.ceil(getMatchedRows().length / state.pageSize));
+        state.currentPage = Math.min(pageCount, state.currentPage + 1);
+        refreshPagination();
+    });
+
+    paginationInput?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+            return;
+        }
+        event.preventDefault();
+        const pageCount = Math.max(1, Math.ceil(getMatchedRows().length / state.pageSize));
+        const nextPage = Math.min(pageCount, Math.max(1, Number(paginationInput.value || 1)));
+        state.currentPage = nextPage;
+        refreshPagination();
+    });
+
+    paginationInput?.addEventListener("blur", () => {
+        const pageCount = Math.max(1, Math.ceil(getMatchedRows().length / state.pageSize));
+        const nextPage = Math.min(pageCount, Math.max(1, Number(paginationInput.value || 1)));
+        state.currentPage = nextPage;
+        refreshPagination();
+    });
+
+    paginationTop?.addEventListener("click", () => {
+        if (!(tableCard instanceof HTMLElement)) {
+            return;
+        }
+        const topPosition = window.scrollY + tableCard.getBoundingClientRect().top - 12;
+        window.scrollTo({ top: Math.max(0, topPosition), behavior: "smooth" });
+    });
+
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element) || target.closest('[data-sales-pagination="customers"] .sales-pagination__page-size')) {
+            return;
+        }
+        closePageSizeMenu();
+    });
+
+    rows.forEach((row) => {
+        row.tr.dataset.paginationMatch = "1";
+    });
+    refreshPagination();
 
     // Export dropdown
     document.querySelectorAll(".js-customer-export").forEach((button) => {
@@ -4916,72 +9348,170 @@ function initCustomerToolbar(shell) {
             if (runBtn) runBtn.disabled = pending.length === 0;
         });
 
-        const addRow = (payload) => {
-            const id = `imp-${Math.random().toString(16).slice(2)}`;
-            const tagsText = (payload.tags || []).join(", ");
-            const tr = document.createElement("tr");
-            tr.innerHTML = `
-                <td>
-                    <button class="customers-person-button js-customer-open" type="button" aria-label="Ubah data pelanggan ${payload.name}">
-                        <div class="customers-person-cell">
-                            <div class="customers-person-cell__avatar"><i class="bi bi-emoji-smile"></i></div>
-                            <strong>${payload.name}</strong>
-                        </div>
-                    </button>
-                </td>
-                <td class="js-customer-row"
-                    data-customer-id="${id}"
-                    data-customer-name="${payload.name}"
-                    data-customer-phone="${payload.phone}"
-                    data-customer-email="${payload.email}"
-                    data-customer-member-id="${payload.memberId}"
-                    data-customer-loyalty="${payload.loyalty}"
-                    data-customer-last-visit="${payload.lastVisit}"
-                    data-customer-birthdate="${payload.birthdate}"
-                    data-customer-tags="${(payload.tags || []).join("|")}"
-                    data-customer-gender="${payload.gender || ""}"
-                    data-customer-status="${payload.status || "Aktif"}"
-                    data-customer-notes="${payload.notes || ""}"
-                    data-customer-address="${payload.address || ""}"
-                >${payload.phone}</td>
-                <td>${payload.email}</td>
-                <td>${payload.memberId}</td>
-                <td>${payload.loyalty}</td>
-                <td>${payload.lastVisit}</td>
-                <td>${payload.birthdate}</td>
-                <td>${tagsText}</td>
-                <td><span class="customers-status-pill">0 Pembatalan</span></td>
-            `;
-            tbody.appendChild(tr);
-            rows.push({
-                tr,
-                id,
-                name: payload.name,
-                phone: payload.phone,
-                email: payload.email,
-                memberId: payload.memberId,
-                loyalty: Number(payload.loyalty || 0) || 0,
-                lastVisit: payload.lastVisit,
-                birthdate: payload.birthdate,
-                tags: payload.tags || [],
-                gender: payload.gender || "",
-                status: payload.status || "Aktif",
-                notes: payload.notes || "",
-                address: payload.address || "",
-            });
+        runBtn?.addEventListener("click", async () => {
+            const file = fileInput?.files?.[0];
+            if (!file || !pending.length) return;
+
+            runBtn.disabled = true;
+            const originalText = runBtn.textContent;
+            runBtn.textContent = "Importing...";
+
+            try {
+                const formData = new FormData();
+                formData.append("_csrf", csrfToken);
+                formData.append("file", file);
+                const payload = await apiRequest("/api/customers/import", {
+                    method: "POST",
+                    body: formData,
+                });
+                const created = Number(payload.result?.created || 0);
+                const updated = Number(payload.result?.updated || 0);
+                const errors = Array.isArray(payload.result?.errors) ? payload.result.errors : [];
+                if (errors.length) {
+                    alert(errors.join("\n"));
+                }
+                if (meta) meta.textContent = `Import selesai. ${created} dibuat, ${updated} diperbarui.`;
+                window.location.reload();
+            } catch (error) {
+                alert(error.message || "Import customer gagal.");
+                runBtn.disabled = false;
+                runBtn.textContent = originalText || "Import";
+            }
+        });
+    }
+
+    const customerModalEl = document.getElementById("customerModal");
+    if (customerModalEl && typeof bootstrap !== "undefined") {
+        const createModal = bootstrap.Modal.getOrCreateInstance(customerModalEl);
+        const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+        const nameInput = customerModalEl.querySelector(".js-customer-create-name");
+        const phoneInput = customerModalEl.querySelector(".js-customer-create-phone");
+        const emailInput = customerModalEl.querySelector(".js-customer-create-email");
+        const memberIdInput = customerModalEl.querySelector(".js-customer-create-member-id");
+        const memberCounter = customerModalEl.querySelector(".js-customer-create-member-counter");
+        const familyCardInput = customerModalEl.querySelector(".js-customer-create-family-card");
+        const familyCounter = customerModalEl.querySelector(".js-customer-create-family-counter");
+        const passportInput = customerModalEl.querySelector(".js-customer-create-passport");
+        const notesInput = customerModalEl.querySelector(".js-customer-create-notes");
+        const addressInput = customerModalEl.querySelector(".js-customer-create-address");
+        const birthYearInput = customerModalEl.querySelector(".js-customer-create-birth-year");
+        const birthMonthInput = customerModalEl.querySelector(".js-customer-create-birth-month");
+        const birthDayInput = customerModalEl.querySelector(".js-customer-create-birth-day");
+        const genderButtons = Array.from(customerModalEl.querySelectorAll(".js-customer-create-gender button"));
+        const notifyButtons = Array.from(customerModalEl.querySelectorAll(".js-customer-create-notify button"));
+        const tagOptions = Array.from(customerModalEl.querySelectorAll(".js-customer-create-tag-option"));
+        const tagLabel = customerModalEl.querySelector(".js-customer-create-tag-picker-label");
+        const marketingToggle = customerModalEl.querySelector(".js-customer-create-marketing-toggle");
+        const saveBtn = customerModalEl.querySelector(".js-customer-create-save");
+        const createState = {
+            gender: "non-active",
+            notify: "email",
+            tags: [],
         };
 
-        runBtn?.addEventListener("click", () => {
-            if (!pending.length) return;
-            pending.forEach(addRow);
-            pending = [];
-            if (meta) meta.textContent = "Import selesai.";
-            runBtn.textContent = "Import (0)";
-            runBtn.disabled = true;
-            fileInput.value = "";
-            apply();
-            if (typeof bootstrap !== "undefined") {
-                bootstrap.Modal.getOrCreateInstance(importModal).hide();
+        const updateCounter = (input, target) => {
+            if (!input || !target) return;
+            target.textContent = `${(input.value || "").trim().length} / 16`;
+        };
+        const buildBirthdate = () => {
+            const year = (birthYearInput?.value || "").trim();
+            const month = (birthMonthInput?.value || "").trim();
+            const day = (birthDayInput?.value || "").trim();
+            const monthIndex = monthNames.findIndex((item) => normalize(item) === normalize(month));
+            if (!year || monthIndex < 0 || !day) {
+                return "";
+            }
+            return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${day.padStart(2, "0")}`;
+        };
+        const syncCreateForm = () => {
+            genderButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.customerCreateGender === createState.gender);
+            });
+            notifyButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.customerCreateNotify === createState.notify);
+            });
+            tagOptions.forEach((button) => {
+                button.classList.toggle("is-active", createState.tags.includes(button.dataset.customerCreateTag || ""));
+            });
+            if (tagLabel) {
+                tagLabel.textContent = createState.tags.length ? createState.tags.join(", ") : "No item";
+            }
+            updateCounter(memberIdInput, memberCounter);
+            updateCounter(familyCardInput, familyCounter);
+        };
+        const resetCreateForm = () => {
+            [nameInput, emailInput, memberIdInput, familyCardInput, passportInput, notesInput, addressInput, birthYearInput, birthMonthInput, birthDayInput].forEach((input) => {
+                if (input) input.value = "";
+            });
+            if (phoneInput) phoneInput.value = "+62";
+            if (marketingToggle) marketingToggle.checked = false;
+            createState.gender = "non-active";
+            createState.notify = "email";
+            createState.tags = [];
+            syncCreateForm();
+        };
+
+        genderButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                createState.gender = button.dataset.customerCreateGender || "non-active";
+                syncCreateForm();
+            });
+        });
+        notifyButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                createState.notify = button.dataset.customerCreateNotify || "off";
+                syncCreateForm();
+            });
+        });
+        tagOptions.forEach((button) => {
+            button.addEventListener("click", () => {
+                const tag = button.dataset.customerCreateTag || "";
+                if (!tag) return;
+                if (createState.tags.includes(tag)) {
+                    createState.tags = createState.tags.filter((item) => item !== tag);
+                } else {
+                    createState.tags.push(tag);
+                }
+                syncCreateForm();
+            });
+        });
+        memberIdInput?.addEventListener("input", () => updateCounter(memberIdInput, memberCounter));
+        familyCardInput?.addEventListener("input", () => updateCounter(familyCardInput, familyCounter));
+        customerModalEl.addEventListener("show.bs.modal", resetCreateForm);
+
+        saveBtn?.addEventListener("click", async () => {
+            const formData = new FormData();
+            formData.append("_csrf", csrfToken);
+            formData.append("name", (nameInput?.value || "").trim());
+            formData.append("gender", createState.gender === "pria" ? "Laki-laki" : (createState.gender === "wanita" ? "Perempuan" : "Non-Aktif"));
+            formData.append("phone", (phoneInput?.value || "").trim());
+            formData.append("email", (emailInput?.value || "").trim());
+            formData.append("member_id", (memberIdInput?.value || "").trim());
+            formData.append("birthdate", buildBirthdate());
+            formData.append("notes", (notesInput?.value || "").trim());
+            formData.append("address", (addressInput?.value || "").trim());
+            formData.append("family_card_number", (familyCardInput?.value || "").trim());
+            formData.append("passport_number", (passportInput?.value || "").trim());
+            formData.append("notify_via", createState.notify);
+            formData.append("marketing_opt_in", marketingToggle?.checked ? "1" : "0");
+            formData.append("status", createState.gender === "non-active" ? "Non-Aktif" : "Aktif");
+            createState.tags.forEach((tag) => formData.append("tags[]", tag));
+
+            saveBtn.disabled = true;
+            const originalText = saveBtn.textContent;
+            saveBtn.textContent = "Menyimpan...";
+
+            try {
+                await apiRequest("/api/customers/save", {
+                    method: "POST",
+                    body: formData,
+                });
+                createModal.hide();
+                window.location.reload();
+            } catch (error) {
+                alert(error.message || "Simpan customer gagal.");
+                saveBtn.disabled = false;
+                saveBtn.textContent = originalText || "Simpan";
             }
         });
     }
@@ -4989,6 +9519,9 @@ function initCustomerToolbar(shell) {
     const customerEditModalEl = document.getElementById("customerEditModal");
     if (customerEditModalEl && typeof bootstrap !== "undefined") {
         const editModal = bootstrap.Modal.getOrCreateInstance(customerEditModalEl);
+        const customerParams = new URLSearchParams(window.location.search);
+        const requestedCustomerId = customerParams.get("customer_id") || "";
+        const requestedReturnTo = customerParams.get("return_to") || "";
         const editTitle = customerEditModalEl.querySelector(".js-customer-edit-title");
         const mainTabs = Array.from(customerEditModalEl.querySelectorAll("[data-customer-edit-tab]"));
         const mainPanels = Array.from(customerEditModalEl.querySelectorAll("[data-customer-edit-panel]"));
@@ -5097,6 +9630,8 @@ function initCustomerToolbar(shell) {
             selectedIds: new Set(),
             reopenCustomer: false,
         };
+        let customerReturnTo = requestedReturnTo.startsWith("/") ? requestedReturnTo : "";
+        let isInternalCustomerModalTransition = false;
         const detailTableConfig = {
             agenda: {
                 upcomingTitle: "Akan Datang",
@@ -5408,16 +9943,16 @@ function initCustomerToolbar(shell) {
             if (phoneInput) phoneInput.value = row.phone;
             if (emailInput) emailInput.value = row.email;
             if (memberIdInput) memberIdInput.value = row.memberId;
-            if (familyCardInput) familyCardInput.value = (row.memberId || "").replace("MEM-", "");
-            if (passportInput) passportInput.value = "";
+            if (familyCardInput) familyCardInput.value = row.familyCardNumber || "";
+            if (passportInput) passportInput.value = row.passportNumber || "";
             if (notesInput) notesInput.value = row.notes || "";
             if (addressInput) addressInput.value = row.address || "";
             if (birthYearInput) birthYearInput.value = birthday.year;
             if (birthMonthInput) birthMonthInput.value = birthday.month;
             if (birthDayInput) birthDayInput.value = birthday.day;
             detailState.form.gender = normalizeGender(row.gender);
-            detailState.form.notify = row.email ? "email" : "off";
-            detailState.form.marketing = row.tags.includes("VIP") || row.tags.includes("Loyal");
+            detailState.form.notify = row.notifyVia || (row.email ? "email" : "off");
+            detailState.form.marketing = Boolean(row.marketingOptIn);
             detailState.form.tags = row.tags.slice();
             detailState.form.photoSelected = false;
             syncFormButtons();
@@ -5470,6 +10005,7 @@ function initCustomerToolbar(shell) {
             if (agendaTag) agendaTag.textContent = detailState.activeRow.tags[0] || "Star Salon";
             syncAgendaServices();
             syncAgendaSummary();
+            isInternalCustomerModalTransition = true;
             editModal.hide();
             window.setTimeout(() => {
                 customerAgendaModal.show();
@@ -5493,12 +10029,51 @@ function initCustomerToolbar(shell) {
             agendaState.reopenCustomer = true;
             customerAgendaModal.hide();
         };
-        const openCustomerDetail = (row) => {
+        const openCustomerDetail = async (row) => {
             detailState.activeRow = row;
             fillForm(row);
             fillProfile(row);
             applyMainTab("profile");
             editModal.show();
+
+            try {
+                const payload = await apiRequest(`/api/customers/detail?id=${encodeURIComponent(row.id)}`);
+                const customer = payload.customer || {};
+                row.name = customer.name || row.name;
+                row.phone = customer.phone || row.phone;
+                row.email = customer.email || row.email;
+                row.memberId = customer.member_id || row.memberId;
+                row.loyalty = Number(customer.loyalty_points || row.loyalty || 0) || 0;
+                row.lastVisit = customer.last_visit || row.lastVisit;
+                row.birthdate = customer.birthdate || row.birthdate;
+                row.tags = Array.isArray(customer.tags) ? customer.tags.slice() : row.tags;
+                row.gender = customer.gender || row.gender;
+                row.status = customer.status || row.status;
+                row.notes = customer.notes || row.notes;
+                row.address = customer.address || row.address;
+                row.familyCardNumber = customer.family_card_number || "";
+                row.passportNumber = customer.passport_number || "";
+                row.notifyVia = customer.notify_via || "off";
+                row.marketingOptIn = Boolean(customer.marketing_opt_in);
+                detailState.detailData = payload.detail || buildDetailData(row);
+                fillForm(row);
+                updateRowDisplay(row);
+                if (editTitle) editTitle.textContent = "Ubah Data Pelanggan";
+                if (profileName) profileName.textContent = row.name;
+                if (profilePhone) profilePhone.textContent = row.phone || "-";
+                if (profileMember) profileMember.textContent = row.memberId || "-";
+                if (statSales) statSales.textContent = detailState.detailData.stats.totalSales;
+                if (statVouchers) statVouchers.textContent = detailState.detailData.stats.voucherUse;
+                if (statDue) statDue.textContent = detailState.detailData.stats.due;
+                if (statBooking) statBooking.textContent = detailState.detailData.stats.totalBooking;
+                if (statComplete) statComplete.textContent = detailState.detailData.stats.completed;
+                if (statCancel) statCancel.textContent = detailState.detailData.stats.cancel;
+                if (statNoShow) statNoShow.textContent = detailState.detailData.stats.noShow;
+                applyProfileTab(detailState.activeProfileTab || "agenda");
+            } catch (_error) {
+                detailState.detailData = buildDetailData(row);
+                renderDetailTables();
+            }
         };
         const updateRowDisplay = (row) => {
             const dataCell = row.tr.querySelector(".js-customer-row");
@@ -5517,6 +10092,10 @@ function initCustomerToolbar(shell) {
                 dataCell.dataset.customerStatus = row.status;
                 dataCell.dataset.customerNotes = row.notes;
                 dataCell.dataset.customerAddress = row.address;
+                dataCell.dataset.customerFamilyCardNumber = row.familyCardNumber || "";
+                dataCell.dataset.customerPassportNumber = row.passportNumber || "";
+                dataCell.dataset.customerNotifyVia = row.notifyVia || "off";
+                dataCell.dataset.customerMarketingOptIn = row.marketingOptIn ? "1" : "0";
                 dataCell.textContent = row.phone;
             }
             if (cells[2]) cells[2].textContent = row.email;
@@ -5524,33 +10103,66 @@ function initCustomerToolbar(shell) {
             if (cells[4]) cells[4].textContent = String(row.loyalty);
             if (cells[6]) cells[6].textContent = row.birthdate;
             if (cells[7]) cells[7].textContent = row.tags.join(", ");
+            if (cells[8]) cells[8].textContent = row.status;
         };
-        const saveCustomerDetail = () => {
+        const saveCustomerDetail = async () => {
             if (!detailState.activeRow) return;
             const row = detailState.activeRow;
-            row.name = (nameInput?.value || "").trim() || row.name;
-            row.phone = (phoneInput?.value || "").trim();
-            row.email = (emailInput?.value || "").trim();
-            row.memberId = (memberIdInput?.value || "").trim();
-            row.birthdate = buildBirthdate() || row.birthdate;
-            row.tags = detailState.form.tags.slice();
-            row.notes = (notesInput?.value || "").trim();
-            row.address = (addressInput?.value || "").trim();
-            row.gender = detailState.form.gender === "pria" ? "Laki-laki" : (detailState.form.gender === "wanita" ? "Perempuan" : "Non-Aktif");
-            row.status = detailState.form.gender === "non-active" ? "Non-Aktif" : "Aktif";
-            updateRowDisplay(row);
-            fillProfile(row);
-            apply();
-            editModal.hide();
+            const formData = new FormData();
+            formData.append("_csrf", csrfToken);
+            formData.append("id", row.id);
+            formData.append("name", (nameInput?.value || "").trim());
+            formData.append("phone", (phoneInput?.value || "").trim());
+            formData.append("email", (emailInput?.value || "").trim());
+            formData.append("member_id", (memberIdInput?.value || "").trim());
+            formData.append("birthdate", buildBirthdate());
+            formData.append("notes", (notesInput?.value || "").trim());
+            formData.append("address", (addressInput?.value || "").trim());
+            formData.append("family_card_number", (familyCardInput?.value || "").trim());
+            formData.append("passport_number", (passportInput?.value || "").trim());
+            formData.append("notify_via", detailState.form.notify);
+            formData.append("marketing_opt_in", marketingToggle?.checked ? "1" : "0");
+            formData.append("gender", detailState.form.gender === "pria" ? "Laki-laki" : (detailState.form.gender === "wanita" ? "Perempuan" : "Non-Aktif"));
+            formData.append("status", detailState.form.gender === "non-active" ? "Non-Aktif" : row.status === "Blocked" ? "Blocked" : "Aktif");
+            detailState.form.tags.forEach((tag) => formData.append("tags[]", tag));
+
+            saveBtn.disabled = true;
+            const originalText = saveBtn.textContent;
+            saveBtn.textContent = "Menyimpan...";
+
+            try {
+                await apiRequest("/api/customers/save", {
+                    method: "POST",
+                    body: formData,
+                });
+                window.location.reload();
+            } catch (error) {
+                alert(error.message || "Update customer gagal.");
+                saveBtn.disabled = false;
+                saveBtn.textContent = originalText || "Simpan";
+            }
         };
-        const deleteCustomer = () => {
+        const deleteCustomer = async () => {
             if (!detailState.activeRow) return;
-            const index = rows.indexOf(detailState.activeRow);
-            detailState.activeRow.tr.remove();
-            if (index >= 0) rows.splice(index, 1);
-            detailState.activeRow = null;
-            apply();
-            editModal.hide();
+            const formData = new FormData();
+            formData.append("_csrf", csrfToken);
+            formData.append("id", detailState.activeRow.id);
+
+            deleteBtn.disabled = true;
+            const originalText = deleteBtn.textContent;
+            deleteBtn.textContent = "Menghapus...";
+
+            try {
+                await apiRequest("/api/customers/delete", {
+                    method: "POST",
+                    body: formData,
+                });
+                window.location.reload();
+            } catch (error) {
+                alert(error.message || "Hapus customer gagal.");
+                deleteBtn.disabled = false;
+                deleteBtn.textContent = originalText || "Hapus Customer";
+            }
         };
 
         tbody.addEventListener("click", (event) => {
@@ -5559,6 +10171,7 @@ function initCustomerToolbar(shell) {
             const tr = trigger.closest("tr");
             const row = rows.find((item) => item.tr === tr);
             if (row) {
+                customerReturnTo = "";
                 openCustomerDetail(row);
             }
         });
@@ -5646,6 +10259,15 @@ function initCustomerToolbar(shell) {
             applyProfileTab("agenda");
             editModal.show();
         });
+        customerEditModalEl.addEventListener("hidden.bs.modal", () => {
+            if (isInternalCustomerModalTransition) {
+                isInternalCustomerModalTransition = false;
+                return;
+            }
+            if (customerReturnTo) {
+                window.location.href = customerReturnTo;
+            }
+        });
         genderButtons.forEach((button) => {
             button.addEventListener("click", () => {
                 detailState.form.gender = button.dataset.customerGender || "non-active";
@@ -5681,6 +10303,13 @@ function initCustomerToolbar(shell) {
         familyCardInput?.addEventListener("input", () => updateCounter(familyCardInput, familyCounter));
         saveBtn?.addEventListener("click", saveCustomerDetail);
         deleteBtn?.addEventListener("click", deleteCustomer);
+
+        if (requestedCustomerId) {
+            const requestedRow = rows.find((row) => String(row.id) === requestedCustomerId);
+            if (requestedRow) {
+                openCustomerDetail(requestedRow);
+            }
+        }
     }
 
     // Edit tag modal (Tag Pelanggan -> klik ikon garis 3)
@@ -5756,6 +10385,42 @@ function initCustomerToolbar(shell) {
     apply();
 }
 
+function staffApiCsrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
+}
+
+async function bookingApiRequest(url, payload = {}, fallbackMessage = "Permintaan booking gagal diproses.") {
+    const body = new FormData();
+    body.append("_csrf", staffApiCsrfToken());
+    Object.entries(payload).forEach(([key, value]) => {
+        body.append(key, typeof value === "string" ? value : JSON.stringify(value ?? ""));
+    });
+
+    const response = await fetch(url, {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.success === false) {
+        throw new Error(result.message || fallbackMessage);
+    }
+
+    return result;
+}
+
+async function staffApiRequest(url, options = {}) {
+    const response = await fetch(url, {
+        credentials: "same-origin",
+        ...options,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.success === false) {
+        throw new Error(payload.message || "Permintaan staff gagal diproses.");
+    }
+    return payload;
+}
+
 function initStaffTabs() {
     const shell = document.querySelector(".js-staff-shell");
     if (!shell) {
@@ -5782,6 +10447,18 @@ function initStaffTabs() {
 
         if (fabGroup) {
             fabGroup.style.display = tabName === "members" ? "flex" : "none";
+        }
+
+        if (tabName === "members") {
+            memberPagination.refresh();
+        } else if (tabName === "attendance") {
+            if (attendanceMode === "staff") {
+                attendanceStaffPagination.refresh();
+            } else {
+                attendanceRecordPagination.refresh();
+            }
+        } else if (tabName === "commission") {
+            commissionPagination.refresh();
         }
     };
 
@@ -5820,6 +10497,187 @@ function initStaffTabs() {
     applyMode("week");
 }
 
+function createBottomPagination({ container, getItems, totalNode, scrollTarget = null, pageSizeOptions = [10, 20, 30, 50] }) {
+    if (!(container instanceof HTMLElement) || typeof getItems !== "function") {
+        return {
+            refresh() {},
+            closeMenu() {},
+        };
+    }
+
+    const toggle = container.querySelector("[data-pagination-page-size-toggle]");
+    const menu = container.querySelector("[data-pagination-page-size-menu]");
+    const prev = container.querySelector("[data-pagination-page-prev]");
+    const next = container.querySelector("[data-pagination-page-next]");
+    const list = container.querySelector("[data-pagination-page-list]");
+    const input = container.querySelector("[data-pagination-page-input]");
+    const top = container.querySelector("[data-pagination-page-top]");
+    const state = {
+        currentPage: 1,
+        pageSize: 20,
+    };
+
+    const getMatchedItems = () => getItems().filter((item) => item?.dataset?.paginationMatch !== "0");
+
+    const closeMenu = () => {
+        if (!(menu instanceof HTMLElement)) {
+            return;
+        }
+        menu.hidden = true;
+        container.classList.remove("is-page-size-open");
+        toggle?.setAttribute("aria-expanded", "false");
+    };
+
+    const renderPageButtons = (pageCount) => {
+        if (!(list instanceof HTMLElement)) {
+            return;
+        }
+
+        const maxButtons = 5;
+        const startPage = Math.max(1, Math.min(state.currentPage - 2, pageCount - maxButtons + 1));
+        const endPage = Math.min(pageCount, startPage + maxButtons - 1);
+        list.innerHTML = "";
+
+        for (let page = startPage; page <= endPage; page += 1) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = `sales-pagination__page${page === state.currentPage ? " is-active" : ""}`;
+            button.textContent = String(page);
+            button.addEventListener("click", () => {
+                state.currentPage = page;
+                refresh();
+            });
+            list.appendChild(button);
+        }
+    };
+
+    const renderPageSizeMenu = () => {
+        if (!(menu instanceof HTMLElement)) {
+            return;
+        }
+
+        menu.innerHTML = pageSizeOptions.map((option) => `
+            <button type="button" class="sales-pagination__page-size-option${option === state.pageSize ? " is-active" : ""}" data-pagination-page-size-option="${option}">
+                ${option}/page
+            </button>
+        `).join("");
+
+        menu.querySelectorAll("[data-pagination-page-size-option]").forEach((button) => {
+            button.addEventListener("click", () => {
+                state.pageSize = Number(button.getAttribute("data-pagination-page-size-option") || 20);
+                state.currentPage = 1;
+                refresh();
+                closeMenu();
+            });
+        });
+    };
+
+    function refresh() {
+        const items = getItems();
+        const matchedItems = getMatchedItems();
+        const totalCount = matchedItems.length;
+        const pageCount = Math.max(1, Math.ceil(totalCount / state.pageSize));
+        state.currentPage = Math.min(Math.max(1, state.currentPage), pageCount);
+        const startIndex = (state.currentPage - 1) * state.pageSize;
+        const endIndex = startIndex + state.pageSize;
+
+        items.forEach((item) => {
+            const matchedIndex = matchedItems.indexOf(item);
+            const isVisible = matchedIndex >= startIndex && matchedIndex < endIndex;
+            item.hidden = matchedIndex === -1 || !isVisible;
+        });
+
+        if (totalNode instanceof HTMLElement) {
+            totalNode.textContent = String(totalCount);
+        }
+
+        if (toggle instanceof HTMLElement) {
+            toggle.innerHTML = `${state.pageSize}/page <i class="bi bi-chevron-${menu?.hidden === false ? "up" : "down"}"></i>`;
+        }
+
+        if (prev instanceof HTMLButtonElement) {
+            prev.disabled = state.currentPage <= 1;
+        }
+
+        if (next instanceof HTMLButtonElement) {
+            next.disabled = state.currentPage >= pageCount || totalCount === 0;
+        }
+
+        if (input instanceof HTMLInputElement) {
+            input.value = String(state.currentPage);
+        }
+
+        renderPageButtons(pageCount);
+    }
+
+    toggle?.addEventListener("click", () => {
+        if (menu?.hidden === false) {
+            closeMenu();
+            refresh();
+            return;
+        }
+        renderPageSizeMenu();
+        if (menu instanceof HTMLElement) {
+            menu.hidden = false;
+        }
+        container.classList.add("is-page-size-open");
+        toggle.setAttribute("aria-expanded", "true");
+        refresh();
+    });
+
+    prev?.addEventListener("click", () => {
+        state.currentPage = Math.max(1, state.currentPage - 1);
+        refresh();
+    });
+
+    next?.addEventListener("click", () => {
+        const pageCount = Math.max(1, Math.ceil(getMatchedItems().length / state.pageSize));
+        state.currentPage = Math.min(pageCount, state.currentPage + 1);
+        refresh();
+    });
+
+    const syncInputPage = () => {
+        if (!(input instanceof HTMLInputElement)) {
+            return;
+        }
+        const pageCount = Math.max(1, Math.ceil(getMatchedItems().length / state.pageSize));
+        const nextPage = Math.min(pageCount, Math.max(1, Number(input.value || 1)));
+        state.currentPage = nextPage;
+        refresh();
+    };
+
+    input?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+            return;
+        }
+        event.preventDefault();
+        syncInputPage();
+    });
+
+    input?.addEventListener("blur", syncInputPage);
+
+    top?.addEventListener("click", () => {
+        const target = scrollTarget instanceof HTMLElement ? scrollTarget : container;
+        const topPosition = window.scrollY + target.getBoundingClientRect().top - 12;
+        window.scrollTo({ top: Math.max(0, topPosition), behavior: "smooth" });
+    });
+
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element) || target.closest("[data-pagination-page-size-toggle]")) {
+            return;
+        }
+        if (!container.contains(target)) {
+            closeMenu();
+        }
+    });
+
+    return {
+        refresh,
+        closeMenu,
+    };
+}
+
 function initInventoryPage() {
     const shell = document.querySelector(".js-inventory-shell");
     if (!shell) {
@@ -5838,11 +10696,13 @@ function initInventoryPage() {
     const productRows = Array.from(productPanel?.querySelectorAll("[data-inventory-row]") || []);
     const productBody = productPanel?.querySelector("tbody");
     const productTotal = productPanel?.querySelector(".js-inventory-total");
+    const productPaginationFooter = productPanel?.querySelector('[data-inventory-pagination="products"]');
     const purchasePanel = shell.querySelector('[data-inventory-panel="purchases"]');
     const purchaseSearch = purchasePanel?.querySelector(".js-inventory-purchase-search");
     const purchaseRows = Array.from(purchasePanel?.querySelectorAll("[data-inventory-purchase-row]") || []);
     const purchaseBody = purchasePanel?.querySelector("tbody");
     const purchaseTotal = purchasePanel?.querySelector(".js-inventory-purchase-total");
+    const purchasePaginationFooter = purchasePanel?.querySelector('[data-inventory-pagination="purchases"]');
     const purchaseLocationToggle = purchasePanel?.querySelector(".js-inventory-purchase-location-toggle");
     const purchaseLocationOptions = Array.from(purchasePanel?.querySelectorAll(".js-inventory-purchase-location-option") || []);
     const opnamePanel = shell.querySelector('[data-inventory-panel="opname"]');
@@ -5850,6 +10710,7 @@ function initInventoryPage() {
     const opnameRows = Array.from(opnamePanel?.querySelectorAll("[data-inventory-opname-row]") || []);
     const opnameBody = opnamePanel?.querySelector(".js-inventory-opname-body");
     const opnameTotal = opnamePanel?.querySelector(".js-inventory-opname-total");
+    const opnamePaginationFooter = opnamePanel?.querySelector('[data-inventory-pagination="opname"]');
     const opnameStatusToggle = opnamePanel?.querySelector(".js-inventory-opname-status-toggle");
     const opnameStatusOptions = Array.from(opnamePanel?.querySelectorAll(".js-inventory-opname-status-option") || []);
     const opnameRangeLabel = opnamePanel?.querySelector(".js-inventory-opname-range-label");
@@ -5931,19 +10792,23 @@ function initInventoryPage() {
     const masterPanel = shell.querySelector('[data-inventory-panel="master"]');
     const masterTabs = Array.from(masterPanel?.querySelectorAll("[data-inventory-master-tab]") || []);
     const masterPanels = Array.from(masterPanel?.querySelectorAll("[data-inventory-master-panel]") || []);
+    const masterSearches = Array.from(masterPanel?.querySelectorAll("[data-inventory-master-search]") || []);
     const brandPanel = masterPanel?.querySelector('[data-inventory-master-panel="brands"]');
     const brandSearch = brandPanel?.querySelector(".js-inventory-brand-search");
     const brandRows = Array.from(brandPanel?.querySelectorAll("[data-inventory-brand-row]") || []);
     const brandTotal = brandPanel?.querySelector(".js-inventory-brand-total");
+    const brandPaginationFooter = brandPanel?.querySelector('[data-inventory-pagination="brands"]');
     const categoryPanel = masterPanel?.querySelector('[data-inventory-master-panel="categories"]');
     const categorySearch = categoryPanel?.querySelector(".js-inventory-category-search");
     const categoryRows = Array.from(categoryPanel?.querySelectorAll("[data-inventory-category-row]") || []);
     const categoryTotal = categoryPanel?.querySelector(".js-inventory-category-total");
+    const categoryPaginationFooter = categoryPanel?.querySelector('[data-inventory-pagination="categories"]');
     const supplierPanel = masterPanel?.querySelector('[data-inventory-master-panel="suppliers"]');
     const supplierSearch = supplierPanel?.querySelector(".js-inventory-supplier-search");
     const supplierRows = Array.from(supplierPanel?.querySelectorAll("[data-inventory-supplier-row]") || []);
     const supplierBody = supplierPanel?.querySelector("tbody");
     const supplierTotal = supplierPanel?.querySelector(".js-inventory-supplier-total");
+    const supplierPaginationFooter = supplierPanel?.querySelector('[data-inventory-pagination="suppliers"]');
     const masterItemModalEl = document.getElementById("inventoryMasterItemModal");
     const masterItemModal = masterItemModalEl && typeof bootstrap !== "undefined"
         ? bootstrap.Modal.getOrCreateInstance(masterItemModalEl)
@@ -6256,6 +11121,16 @@ function initInventoryPage() {
         if (inventoryFabMenu) {
             inventoryFabMenu.hidden = true;
             inventoryFabMenu.classList.remove("is-open");
+        }
+
+        if (tabName === "products") {
+            productPagination.refresh();
+        } else if (tabName === "purchases") {
+            purchasePagination.refresh();
+        } else if (tabName === "opname") {
+            opnamePagination.refresh();
+        } else if (tabName === "master") {
+            applyMasterTab(activeMasterTab);
         }
     };
 
@@ -6863,13 +11738,63 @@ function initInventoryPage() {
             panel.classList.toggle("is-active", isActive);
             panel.hidden = !isActive;
         });
+        masterSearches.forEach((search) => {
+            const isActive = search.dataset.inventoryMasterSearch === tabName;
+            search.classList.toggle("is-active", isActive);
+            search.hidden = !isActive;
+        });
+
+        if (tabName === "brands") {
+            brandPagination.refresh();
+        } else if (tabName === "categories") {
+            categoryPagination.refresh();
+        } else if (tabName === "suppliers") {
+            supplierPagination.refresh();
+        }
     };
 
     const updateSimpleMasterTotal = (rows, node) => {
         if (node) {
-            node.textContent = `Total ${rows.filter((row) => !row.hidden).length}`;
+            node.textContent = String(rows.filter((row) => row.dataset.paginationMatch !== "0").length);
         }
     };
+
+    const productPagination = createBottomPagination({
+        container: productPaginationFooter,
+        getItems: () => productRows,
+        totalNode: productTotal,
+        scrollTarget: productPanel?.querySelector(".inventory-table-card"),
+    });
+    const purchasePagination = createBottomPagination({
+        container: purchasePaginationFooter,
+        getItems: () => purchaseRows,
+        totalNode: purchaseTotal,
+        scrollTarget: purchasePanel?.querySelector(".inventory-table-card"),
+    });
+    const opnamePagination = createBottomPagination({
+        container: opnamePaginationFooter,
+        getItems: () => opnameRows,
+        totalNode: opnameTotal,
+        scrollTarget: opnamePanel?.querySelector(".inventory-table-card"),
+    });
+    const brandPagination = createBottomPagination({
+        container: brandPaginationFooter,
+        getItems: () => brandRows,
+        totalNode: brandTotal,
+        scrollTarget: brandPanel?.querySelector(".inventory-table-card"),
+    });
+    const categoryPagination = createBottomPagination({
+        container: categoryPaginationFooter,
+        getItems: () => categoryRows,
+        totalNode: categoryTotal,
+        scrollTarget: categoryPanel?.querySelector(".inventory-table-card"),
+    });
+    const supplierPagination = createBottomPagination({
+        container: supplierPaginationFooter,
+        getItems: () => supplierRows,
+        totalNode: supplierTotal,
+        scrollTarget: supplierPanel?.querySelector(".inventory-table-card"),
+    });
 
     const refreshInventoryLookupOptions = () => {
         const syncSelect = (field, placeholderLabel, rows) => {
@@ -6999,7 +11924,6 @@ function initInventoryPage() {
         const type = masterItemModalEl?.dataset.masterType || "brands";
         if (!activeMasterRow) return;
         const rows = type === "categories" ? categoryRows : brandRows;
-        const totalNode = type === "categories" ? categoryTotal : brandTotal;
         try {
             await inventoryPost("/api/inventory/master/delete", {
                 type,
@@ -7009,7 +11933,11 @@ function initInventoryPage() {
             if (index >= 0) rows.splice(index, 1);
             activeMasterRow.remove();
             refreshInventoryLookupOptions();
-            updateSimpleMasterTotal(rows, totalNode);
+            if (type === "categories") {
+                applyCategoryFilters();
+            } else {
+                applyBrandFilters();
+            }
             masterItemModal?.hide();
         } catch (error) {
             handleInventoryError(error, "Master Data");
@@ -7125,7 +12053,7 @@ function initInventoryPage() {
             if (index >= 0) supplierRows.splice(index, 1);
             activeMasterRow.remove();
             refreshInventoryLookupOptions();
-            updateSimpleMasterTotal(supplierRows, supplierTotal);
+            applySupplierFilters();
             supplierModal?.hide();
         } catch (error) {
             handleInventoryError(error, "Supplier");
@@ -7759,7 +12687,6 @@ function initInventoryPage() {
         const category = filterCategory?.value || "";
         const supplier = filterSupplier?.value || "";
         const stock = filterStock?.value || "";
-        let visible = 0;
 
         productRows.forEach((row) => {
             const matchesQuery = !query || String(row.textContent || "").toLowerCase().includes(query);
@@ -7768,13 +12695,10 @@ function initInventoryPage() {
             const matchesSupplier = !supplier || row.dataset.supplier === supplier;
             const matchesStock = !stock || row.dataset.stockState === stock;
             const show = matchesQuery && matchesBrand && matchesCategory && matchesSupplier && matchesStock;
-            row.hidden = !show;
-            if (show) visible += 1;
+            row.dataset.paginationMatch = show ? "1" : "0";
         });
 
-        if (productTotal) {
-            productTotal.textContent = `Total ${visible}`;
-        }
+        productPagination.refresh();
     };
 
     const applyPurchaseFilters = () => {
@@ -7783,7 +12707,6 @@ function initInventoryPage() {
         const status = purchaseFilterStatus?.value || "";
         const supplier = purchaseFilterSupplier?.value || "";
         const location = purchaseLocationToggle?.dataset.locationValue || "";
-        let visible = 0;
 
         purchaseRows.forEach((row) => {
             const matchesQuery = !query || String(row.textContent || "").toLowerCase().includes(query);
@@ -7791,13 +12714,10 @@ function initInventoryPage() {
             const matchesSupplier = !supplier || row.dataset.supplier === supplier;
             const matchesLocation = !location || row.dataset.location === location;
             const show = matchesQuery && matchesStatus && matchesSupplier && matchesLocation;
-            row.hidden = !show;
-            if (show) visible += 1;
+            row.dataset.paginationMatch = show ? "1" : "0";
         });
 
-        if (purchaseTotal) {
-            purchaseTotal.textContent = `Total ${visible}`;
-        }
+        purchasePagination.refresh();
     };
 
     const applyOpnameRangeLabel = ({ closeModal = true } = {}) => {
@@ -7829,7 +12749,6 @@ function initInventoryPage() {
         const status = opnameStatusToggle?.dataset.statusValue || "";
         const start = startOfDay(opnameDateStart?.value || "");
         const end = endOfDay(opnameDateEnd?.value || "");
-        let visible = 0;
 
         opnameRows.forEach((row) => {
             const matchesQuery = !query || String(row.textContent || "").toLowerCase().includes(query);
@@ -7841,13 +12760,10 @@ function initInventoryPage() {
             const rowEnd = rowEndSource ? new Date(rowEndSource.getFullYear(), rowEndSource.getMonth(), rowEndSource.getDate(), 23, 59, 59, 999) : null;
             const matchesDate = (!start || (rowEnd && rowEnd >= start)) && (!end || (rowStart && rowStart <= end));
             const show = matchesQuery && matchesStatus && matchesDate;
-            row.hidden = !show;
-            if (show) visible += 1;
+            row.dataset.paginationMatch = show ? "1" : "0";
         });
 
-        if (opnameTotal) {
-            opnameTotal.textContent = `Total ${visible}`;
-        }
+        opnamePagination.refresh();
     };
 
     const syncOpnameDetailRow = (row) => {
@@ -8314,28 +13230,24 @@ function initInventoryPage() {
         opnameReviewModal?.show();
     };
 
-    const applySimpleInventorySearch = (rows, query, totalNode) => {
-        let visible = 0;
+    const applySimpleInventorySearch = (rows, query, pagination) => {
         rows.forEach((row) => {
             const show = !query || String(row.textContent || "").toLowerCase().includes(query);
-            row.hidden = !show;
-            if (show) visible += 1;
+            row.dataset.paginationMatch = show ? "1" : "0";
         });
-        if (totalNode) {
-            totalNode.textContent = `Total ${visible}`;
-        }
+        pagination.refresh();
     };
 
     const applyBrandFilters = () => {
-        applySimpleInventorySearch(brandRows, String(brandSearch?.value || "").trim().toLowerCase(), brandTotal);
+        applySimpleInventorySearch(brandRows, String(brandSearch?.value || "").trim().toLowerCase(), brandPagination);
     };
 
     const applyCategoryFilters = () => {
-        applySimpleInventorySearch(categoryRows, String(categorySearch?.value || "").trim().toLowerCase(), categoryTotal);
+        applySimpleInventorySearch(categoryRows, String(categorySearch?.value || "").trim().toLowerCase(), categoryPagination);
     };
 
     const applySupplierFilters = () => {
-        applySimpleInventorySearch(supplierRows, String(supplierSearch?.value || "").trim().toLowerCase(), supplierTotal);
+        applySimpleInventorySearch(supplierRows, String(supplierSearch?.value || "").trim().toLowerCase(), supplierPagination);
     };
 
     const resetImportState = () => {
@@ -8768,6 +13680,7 @@ function initInventoryPage() {
             opnameDatePresets.forEach((item) => {
                 item.classList.toggle("is-active", item === button);
             });
+            applyOpnameRangeLabel();
         });
     });
 
@@ -9527,6 +14440,8 @@ function initStaffNewModal(shell) {
     const phoneInput = modalEl.querySelector(".js-staff-new-phone");
     const emailInput = modalEl.querySelector(".js-staff-new-email");
     const titleInput = modalEl.querySelector(".js-staff-new-title");
+    const notesInput = modalEl.querySelector(".js-staff-new-notes");
+    const instagramInput = modalEl.querySelector(".js-staff-new-instagram");
     const saveBtn = modalEl.querySelector(".js-staff-new-save");
     const modalTitle = modalEl.querySelector(".js-staff-modal-title");
     const deleteBtn = modalEl.querySelector(".js-staff-edit-delete");
@@ -9544,7 +14459,6 @@ function initStaffNewModal(shell) {
     const locationChecks = Array.from(modalEl.querySelectorAll(".js-staff-location-check"));
     const commissionEditor = modalEl.querySelector(".js-staff-commission-editor");
     const commissionEditorTitle = modalEl.querySelector(".js-staff-commission-editor-title");
-    const commissionSummary = modalEl.querySelector(".js-staff-commission-summary");
     const commissionDefaultLabel = modalEl.querySelector(".js-staff-commission-default-label");
     const commissionUseDefaultLabel = modalEl.querySelector(".js-staff-commission-use-default-label");
     const commissionValue = modalEl.querySelector(".js-staff-commission-value");
@@ -9555,10 +14469,17 @@ function initStaffNewModal(shell) {
     const commissionConfirmItem = modalEl.querySelector(".js-staff-commission-confirm-item");
     const commissionConfirmValue = modalEl.querySelector(".js-staff-commission-confirm-value");
     const commissionRows = Array.from(modalEl.querySelectorAll("[data-commission-service-row]"));
+    const commissionSummaryNodes = {
+        service: modalEl.querySelector('[data-commission-summary="service"]'),
+        product: modalEl.querySelector('[data-commission-summary="product"]'),
+    };
+    const genderButtons = Array.from(modalEl.querySelectorAll(".customer-segmented.staff-new-segmented button")).slice(0, 3);
+    const colorButtons = Array.from(modalEl.querySelectorAll(".staff-color-grid button:not(.staff-color-grid__add)"));
     const memberList = shell.querySelector(".staff-member-list");
     const commissionStaffMenu = shell.querySelector(".js-staff-commission-staff-filter")?.closest(".dropdown")?.querySelector(".ss-dropdown-menu");
     let activeCommissionTarget = "all";
     let activeCommissionLabelTarget = null;
+    let commissionState = null;
     let photoDataUrl = "";
     let activeEditRow = null;
     const commissionTitles = {
@@ -9577,6 +14498,16 @@ function initStaffNewModal(shell) {
             confirmItem: "Produk",
         },
     };
+    const createEmptyCommissionConfig = () => ({
+        default_type: "percent",
+        default_value: 0,
+        use_default: false,
+        rows: {},
+    });
+    const createEmptyCommissionState = () => ({
+        service: createEmptyCommissionConfig(),
+        product: createEmptyCommissionConfig(),
+    });
 
     const switchPanel = (panelName) => {
         tabButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.staffNewTab === panelName));
@@ -9595,6 +14526,13 @@ function initStaffNewModal(shell) {
         const digits = raw.replace(/\D+/g, "").replace(/^0+/, "");
         return digits ? `+62${digits}` : "+62";
     };
+    const selectedGender = () => {
+        const label = genderButtons.find((button) => button.classList.contains("is-active"))?.textContent?.trim().toLowerCase() || "";
+        if (label.includes("pria")) return "Laki-laki";
+        if (label.includes("wanita")) return "Perempuan";
+        return "Non-Aktif";
+    };
+    const selectedColor = () => colorButtons.find((button) => button.classList.contains("is-active"))?.style.background || "#8cc9ff";
     const setDateButtonText = (target, value) => {
         const button = modalEl.querySelector(`[data-date-target="${target}"] span`);
         if (button) {
@@ -9627,13 +14565,27 @@ function initStaffNewModal(shell) {
     };
     const renderStaffRow = (row, data) => {
         row.dataset.staffMemberRow = "";
+        row.dataset.staffId = String(data.id || "");
         row.dataset.name = data.name;
         row.dataset.email = data.email;
         row.dataset.phone = data.phone;
-        row.dataset.location = "Star Salon";
+        row.dataset.location = data.locationName || "Star Salon";
+        row.dataset.locationId = String(data.locationId || 1);
         row.dataset.role = data.role;
-        row.dataset.status = "Aktif";
+        row.dataset.status = data.status || "Aktif";
         row.dataset.bookingEnabled = data.bookingEnabled ? "1" : "0";
+        row.dataset.gender = data.gender || "";
+        row.dataset.agendaColor = data.agendaColor || "#8cc9ff";
+        row.dataset.startedWorkingOn = data.startedWorkingOn || "";
+        row.dataset.endedWorkingOn = data.endedWorkingOn || "";
+        row.dataset.publicTitle = data.publicTitle || "";
+        row.dataset.notes = data.notes || "";
+        row.dataset.instagramHandle = data.instagramHandle || "";
+        row.dataset.photoDataUrl = data.photo || "";
+        row.dataset.serviceIds = (data.serviceIds || []).join(",");
+        row.dataset.commissionType = data.commissionType || "Persentase";
+        row.dataset.commissionValue = String(data.commissionValue || 0);
+        row.dataset.commissionRules = JSON.stringify(data.commissionRules || []);
         row.tabIndex = 0;
         row.setAttribute("role", "button");
         row.innerHTML = `
@@ -9757,11 +14709,64 @@ function initStaffNewModal(shell) {
         const normalized = String(value || "0").replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
         return Number.parseFloat(normalized) || 0;
     };
+    const parseJsonObject = (value, fallback) => {
+        if (typeof value !== "string" || !value.trim()) {
+            return fallback;
+        }
+        try {
+            const parsed = JSON.parse(value);
+            return parsed && typeof parsed === "object" ? parsed : fallback;
+        } catch (error) {
+            return fallback;
+        }
+    };
     const formatCommissionPercent = (value) => {
         const number = parseCommissionValue(value);
         return Number.isInteger(number) ? String(number) : String(number).replace(".", ",");
     };
     const formatCommissionAmount = (value) => `Rp ${parseCommissionValue(value).toLocaleString("id-ID", { maximumFractionDigits: 0 })}`;
+    const formatCommissionSummary = (config) => {
+        const amount = Number(config?.default_value || 0);
+        const type = config?.default_type === "amount" ? "amount" : "percent";
+        if (!config?.use_default) {
+            return "Atur per item";
+        }
+        return type === "amount" ? formatCommissionAmount(amount) : `${formatCommissionPercent(amount)}%`;
+    };
+    const normalizeCommissionConfig = (config) => {
+        const rows = config?.rows && typeof config.rows === "object" ? config.rows : {};
+        const normalizedRows = {};
+        Object.entries(rows).forEach(([rowId, rowConfig]) => {
+            if (!rowConfig || typeof rowConfig !== "object") {
+                return;
+            }
+            normalizedRows[String(rowId)] = {
+                type: rowConfig.type === "amount" ? "amount" : "percent",
+                value: parseCommissionValue(rowConfig.value ?? 0),
+            };
+        });
+        return {
+            default_type: config?.default_type === "amount" ? "amount" : "percent",
+            default_value: parseCommissionValue(config?.default_value ?? 0),
+            use_default: Boolean(config?.use_default),
+            rows: normalizedRows,
+        };
+    };
+    const normalizeCommissionState = (state) => ({
+        service: normalizeCommissionConfig(state?.service ?? createEmptyCommissionConfig()),
+        product: normalizeCommissionConfig(state?.product ?? createEmptyCommissionConfig()),
+    });
+    const updateCommissionSummary = (target) => {
+        const node = commissionSummaryNodes[target];
+        if (!node || !commissionState?.[target]) {
+            return;
+        }
+        node.textContent = formatCommissionSummary(commissionState[target]);
+    };
+    const updateCommissionSummaries = () => {
+        updateCommissionSummary("service");
+        updateCommissionSummary("product");
+    };
     const commissionTypeLabel = () => {
         const activeType = modalEl.querySelector("[data-commission-type].is-active")?.dataset.commissionType || "percent";
         const value = commissionValue?.value || "0";
@@ -9809,6 +14814,79 @@ function initStaffNewModal(shell) {
         const type = activeButton.dataset.commissionType || activeButton.dataset.rowCommissionType || "percent";
         formatCommissionField(container.querySelector("input"), type === "amount" ? "amount" : "percent");
     };
+    const readCommissionConfigFromEditor = (target) => {
+        const rows = {};
+        commissionRows.forEach((row) => {
+            if ((row.dataset.commissionKind || "service") !== target) {
+                return;
+            }
+            const input = row.querySelector("input");
+            const activeType = row.querySelector("[data-row-commission-type].is-active")?.dataset.rowCommissionType || "percent";
+            rows[row.dataset.serviceId || ""] = {
+                type: activeType === "amount" ? "amount" : "percent",
+                value: parseCommissionValue(input?.value || 0),
+            };
+        });
+        return normalizeCommissionConfig({
+            default_type: modalEl.querySelector("[data-commission-type].is-active")?.dataset.commissionType || "percent",
+            default_value: parseCommissionValue(commissionValue?.value || 0),
+            use_default: Boolean(commissionUseDefault?.checked),
+            rows,
+        });
+    };
+    const applyCommissionConfigToEditor = (target) => {
+        const config = normalizeCommissionConfig(commissionState?.[target] ?? createEmptyCommissionConfig());
+        if (commissionValue) {
+            commissionValue.value = String(config.default_value ?? 0);
+        }
+        const defaultTypeButton = modalEl.querySelector(`[data-commission-type="${config.default_type}"]`)
+            || modalEl.querySelector('[data-commission-type="percent"]');
+        if (defaultTypeButton) {
+            setCommissionType(defaultTypeButton.parentElement, defaultTypeButton);
+        }
+        if (commissionUseDefault) {
+            commissionUseDefault.checked = Boolean(config.use_default);
+        }
+        commissionRows.forEach((row) => {
+            const rowConfig = config.rows[row.dataset.serviceId || ""] || {
+                type: config.default_type,
+                value: config.default_value,
+            };
+            const input = row.querySelector("input");
+            if (input) {
+                input.value = String(rowConfig.value ?? 0);
+            }
+            const typeButton = row.querySelector(`[data-row-commission-type="${rowConfig.type === "amount" ? "amount" : "percent"}"]`)
+                || row.querySelector('[data-row-commission-type="percent"]');
+            if (typeButton) {
+                setCommissionType(typeButton.parentElement, typeButton);
+            }
+        });
+        syncDefaultCommissionMode();
+        applyCommissionFilters();
+    };
+    const commitCommissionEditor = (target) => {
+        commissionState = normalizeCommissionState({
+            ...(commissionState || createEmptyCommissionState()),
+            [target]: readCommissionConfigFromEditor(target),
+        });
+        updateCommissionSummaries();
+    };
+    const getPrimaryCommissionConfig = () => {
+        const serviceConfig = normalizeCommissionConfig(commissionState?.service ?? createEmptyCommissionConfig());
+        if (serviceConfig.use_default) {
+            return serviceConfig;
+        }
+        const firstRow = Object.values(serviceConfig.rows).find((row) => row && Number(row.value || 0) > 0);
+        if (firstRow) {
+            return normalizeCommissionConfig({
+                ...serviceConfig,
+                default_type: firstRow.type,
+                default_value: firstRow.value,
+            });
+        }
+        return serviceConfig;
+    };
 
     const openCommissionEditor = (target, labelButton) => {
         activeCommissionTarget = target || "all";
@@ -9827,7 +14905,7 @@ function initStaffNewModal(shell) {
             commissionAssigned.closest(".staff-commission-assigned").hidden = activeCommissionTarget !== "service";
             commissionAssigned.checked = false;
         }
-        applyCommissionFilters();
+        applyCommissionConfigToEditor(activeCommissionTarget);
         if (commissionEditor) {
             commissionEditor.hidden = false;
         }
@@ -9928,18 +15006,7 @@ function initStaffNewModal(shell) {
     commissionSearch?.addEventListener("input", applyCommissionFilters);
     commissionAssigned?.addEventListener("change", applyCommissionFilters);
     modalEl.querySelector(".js-staff-commission-done")?.addEventListener("click", () => {
-        const activeType = modalEl.querySelector("[data-commission-type].is-active")?.dataset.commissionType || "percent";
-        const value = (commissionValue?.value || "0").trim() || "0";
-        const label = activeType === "amount" ? formatCommissionAmount(value) : `${formatCommissionPercent(value)}%`;
-        if (activeCommissionTarget === "all" && commissionSummary) {
-            commissionSummary.textContent = label;
-        } else if (activeCommissionLabelTarget) {
-            const summary = activeCommissionLabelTarget.previousElementSibling;
-            activeCommissionLabelTarget.textContent = "Ganti";
-            if (summary) {
-                summary.textContent = `${summary.textContent.split(" - ")[0]} - ${label}`;
-            }
-        }
+        commitCommissionEditor(activeCommissionTarget);
         closeCommissionEditor();
     });
 
@@ -9953,6 +15020,8 @@ function initStaffNewModal(shell) {
         if (phoneInput) phoneInput.value = "+62";
         if (emailInput) emailInput.value = "";
         if (titleInput) titleInput.value = "";
+        if (notesInput) notesInput.value = "";
+        if (instagramInput) instagramInput.value = "";
         photoDataUrl = "";
         if (photoInput) photoInput.value = "";
         if (photoPreview) photoPreview.innerHTML = '<i class="bi bi-person"></i>';
@@ -9962,10 +15031,13 @@ function initStaffNewModal(shell) {
         syncBookingSwitch();
         setDateButtonText("start", startDate?.value || "");
         setDateButtonText("end", endDate?.value || "");
+        if (startDate && !startDate.value) startDate.value = new Date().toISOString().slice(0, 10);
+        if (endDate) endDate.value = "";
         serviceChecks.forEach((check) => { check.checked = true; });
         if (serviceAll) serviceAll.checked = true;
         locationChecks.forEach((check) => { check.checked = true; });
         syncLocations();
+        commissionState = createEmptyCommissionState();
         if (commissionUseDefault) commissionUseDefault.checked = false;
         if (commissionValue) commissionValue.value = "0";
         modalEl.querySelectorAll(".staff-commission-input").forEach((container) => {
@@ -9974,6 +15046,7 @@ function initStaffNewModal(shell) {
             if (input) input.value = "0";
             if (percentButton) setCommissionType(container, percentButton);
         });
+        updateCommissionSummaries();
         syncDefaultCommissionMode();
         switchPanel("details");
         closeCommissionEditor();
@@ -9988,18 +15061,68 @@ function initStaffNewModal(shell) {
         const phone = normalizePhone(row.dataset.phone || "");
         const role = row.dataset.role || "";
         const bookingEnabled = row.dataset.bookingEnabled !== "0";
-        const photo = row.querySelector(".staff-member-avatar img")?.getAttribute("src") || "";
+        const photo = row.dataset.photoDataUrl || row.querySelector(".staff-member-avatar img")?.getAttribute("src") || "";
+        const gender = row.dataset.gender || "";
+        const startedWorkingOn = row.dataset.startedWorkingOn || "";
+        const endedWorkingOn = row.dataset.endedWorkingOn || "";
+        const publicTitle = row.dataset.publicTitle || "";
+        const notes = row.dataset.notes || "";
+        const instagramHandle = row.dataset.instagramHandle || "";
+        const serviceIds = String(row.dataset.serviceIds || "").split(",").filter(Boolean);
+        const color = row.dataset.agendaColor || "#8cc9ff";
+        const locationId = row.dataset.locationId || "1";
+        const commissionRules = parseJsonObject(row.dataset.commissionRules, {});
+        const baseCommissionType = (row.dataset.commissionType || "").toLowerCase().includes("tetap") ? "amount" : "percent";
+        const baseCommissionValue = parseCommissionValue(row.dataset.commissionValue || 0);
 
         if (nameInput) nameInput.value = name;
         if (emailInput) emailInput.value = email;
         if (phoneInput) phoneInput.value = phone;
-        if (titleInput) titleInput.value = role;
+        if (titleInput) titleInput.value = publicTitle;
+        if (notesInput) notesInput.value = notes;
+        if (instagramInput) instagramInput.value = instagramHandle;
         photoDataUrl = photo;
         if (photoInput) photoInput.value = "";
         if (photoPreview) photoPreview.innerHTML = photo ? `<img src="${escapeHtml(photo)}" alt="">` : '<i class="bi bi-person"></i>';
         if (bookingToggle) bookingToggle.checked = bookingEnabled;
         syncBookingSwitch();
         setRoleSelection(role);
+        setActiveButton(genderButtons, (button) => {
+            const label = button.textContent?.trim().toLowerCase() || "";
+            return (gender === "Laki-laki" && label.includes("pria"))
+                || (gender === "Perempuan" && label.includes("wanita"))
+                || (gender !== "Laki-laki" && gender !== "Perempuan" && label.includes("disable"));
+        }, 0);
+        if (startDate) startDate.value = startedWorkingOn;
+        if (endDate) endDate.value = endedWorkingOn;
+        setDateButtonText("start", startedWorkingOn || "");
+        setDateButtonText("end", endedWorkingOn || "");
+        serviceChecks.forEach((check) => {
+            check.checked = serviceIds.length === 0 || serviceIds.includes(check.value);
+        });
+        if (serviceAll) serviceAll.checked = serviceChecks.every((check) => check.checked);
+        locationChecks.forEach((check) => {
+            check.checked = check.value === locationId;
+        });
+        syncLocations();
+        colorButtons.forEach((button) => {
+            button.classList.toggle("is-active", button.style.background === color);
+        });
+        commissionState = normalizeCommissionState({
+            service: {
+                default_type: commissionRules?.service?.default_type || baseCommissionType,
+                default_value: commissionRules?.service?.default_value ?? baseCommissionValue,
+                use_default: commissionRules?.service?.use_default ?? true,
+                rows: commissionRules?.service?.rows ?? {},
+            },
+            product: {
+                default_type: commissionRules?.product?.default_type || "percent",
+                default_value: commissionRules?.product?.default_value ?? 0,
+                use_default: commissionRules?.product?.use_default ?? false,
+                rows: commissionRules?.product?.rows ?? {},
+            },
+        });
+        updateCommissionSummaries();
         switchPanel("details");
         closeCommissionEditor();
     };
@@ -10020,48 +15143,78 @@ function initStaffNewModal(shell) {
         fillFormFromRow(row);
         modal?.show();
     });
-    deleteBtn?.addEventListener("click", () => {
+    deleteBtn?.addEventListener("click", async () => {
         if (!activeEditRow) return;
-        activeEditRow.remove();
-        activeEditRow = null;
-        resetForm();
-        modal?.hide();
+        deleteBtn.disabled = true;
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            formData.append("id", activeEditRow.dataset.staffId || "");
+            await staffApiRequest("/api/staff/delete", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Hapus staff gagal.");
+            deleteBtn.disabled = false;
+        }
     });
 
-    saveBtn?.addEventListener("click", () => {
+    saveBtn?.addEventListener("click", async () => {
         const name = (nameInput?.value || "").trim();
         if (!name) {
             nameInput?.focus();
             return;
         }
 
-        const email = (emailInput?.value || "").trim() || "-";
+        const email = (emailInput?.value || "").trim();
         const phone = (phoneInput?.value || "").trim() || "+62";
-        const role = (titleInput?.value || "").trim() || selectedRole();
-        const row = activeEditRow || document.createElement("div");
-        renderStaffRow(row, {
-            name,
-            email,
-            phone,
-            role,
-            photo: photoDataUrl,
-            bookingEnabled: Boolean(bookingToggle?.checked),
-        });
-        if (!activeEditRow) {
-            memberList?.prepend(row);
+        const roleTitle = selectedRole();
+        const locationCheckbox = locationChecks.find((check) => check.checked);
+        const serviceIds = serviceChecks.filter((check) => check.checked).map((check) => check.value);
+        const formData = new FormData();
+        formData.append("_csrf", staffApiCsrfToken());
+        if (activeEditRow?.dataset.staffId) {
+            formData.append("id", activeEditRow.dataset.staffId);
         }
+        formData.append("name", name);
+        formData.append("email", email);
+        formData.append("phone", phone);
+        formData.append("role_title", roleTitle);
+        formData.append("gender", selectedGender());
+        formData.append("booking_enabled", bookingToggle?.checked ? "1" : "0");
+        formData.append("agenda_color", selectedColor());
+        formData.append("started_working_on", startDate?.value || "");
+        formData.append("ended_working_on", endDate?.value || "");
+        formData.append("public_title", (titleInput?.value || "").trim());
+        formData.append("notes", (notesInput?.value || "").trim());
+        formData.append("instagram_handle", (instagramInput?.value || "").trim());
+        formData.append("photo_data_url", photoDataUrl);
+        formData.append("location_id", locationCheckbox?.value || "1");
+        formData.append("status", bookingToggle?.checked ? "Aktif" : (activeEditRow?.dataset.status || "Aktif"));
+        const commissionPayload = normalizeCommissionState(commissionState || createEmptyCommissionState());
+        const primaryCommission = getPrimaryCommissionConfig();
+        formData.append("commission_type", primaryCommission.default_type === "amount" ? "Tetap" : "Persentase");
+        formData.append("commission_value", String(primaryCommission.default_value || 0));
+        formData.append("commission_rules", JSON.stringify(commissionPayload));
+        serviceIds.forEach((id) => formData.append("service_ids[]", id));
 
-        if (!activeEditRow && commissionStaffMenu) {
-            const item = document.createElement("button");
-            item.className = "dropdown-item";
-            item.type = "button";
-            item.dataset.commissionStaff = name;
-            item.textContent = name;
-            commissionStaffMenu.appendChild(item);
+        saveBtn.disabled = true;
+        const originalText = saveBtn.textContent;
+        saveBtn.textContent = "Menyimpan...";
+
+        try {
+            await staffApiRequest("/api/staff/save", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Simpan staff gagal.");
+            saveBtn.disabled = false;
+            saveBtn.textContent = originalText || "Simpan";
         }
-
-        resetForm();
-        modal?.hide();
     });
 }
 
@@ -10111,8 +15264,17 @@ function initStaffToolbarActions(shell) {
         });
     }
 
+    const memberPagination = createBottomPagination({
+        container: memberPaginationFooter,
+        getItems: () => memberRows,
+        totalNode: memberPaginationTotal,
+        scrollTarget: memberList,
+    });
+
     const memberRows = Array.from(shell.querySelectorAll("[data-staff-member-row]"));
     const memberList = shell.querySelector(".staff-member-list");
+    const memberPaginationFooter = shell.querySelector('[data-staff-pagination="members"]');
+    const memberPaginationTotal = memberPaginationFooter?.querySelector(".js-staff-members-total");
     const memberSearch = shell.querySelector(".js-staff-member-search");
     const memberRoleFilter = shell.querySelector(".js-staff-member-role-filter");
     const memberSortToggle = shell.querySelector(".js-staff-member-sort-toggle");
@@ -10131,8 +15293,9 @@ function initStaffToolbarActions(shell) {
         memberRows.forEach((row) => {
             const matchesQuery = !query || text(row.dataset[activeMemberField]).includes(query);
             const matchesRole = activeRole === "all" || row.dataset.role === activeRole;
-            row.hidden = !matchesQuery || !matchesRole;
+            row.dataset.paginationMatch = matchesQuery && matchesRole ? "1" : "0";
         });
+        memberPagination.refresh();
     };
 
     const sortMembers = (dir = activeSortDir, field = activeMemberField) => {
@@ -10145,7 +15308,7 @@ function initStaffToolbarActions(shell) {
     };
 
     const memberCsvLines = () => {
-        const visibleRows = memberRows.filter((row) => !row.hidden);
+        const visibleRows = memberRows.filter((row) => row.dataset.paginationMatch !== "0");
         return [
             ["Nama", "Email", "Telepon", "Role", "Lokasi", "Status"],
             ...visibleRows.map((row) => [row.dataset.name, row.dataset.email, row.dataset.phone, row.dataset.role, row.dataset.location, row.dataset.status]),
@@ -10214,6 +15377,10 @@ function initStaffToolbarActions(shell) {
     const attendanceViews = Array.from(shell.querySelectorAll("[data-staff-attendance-view]"));
     const attendanceStaffRows = Array.from(shell.querySelectorAll("[data-staff-attendance-row]"));
     const attendanceRecordRows = Array.from(shell.querySelectorAll("[data-staff-attendance-record]"));
+    const attendanceStaffPaginationFooter = shell.querySelector('[data-staff-pagination="attendance-staff"]');
+    const attendanceStaffPaginationTotal = attendanceStaffPaginationFooter?.querySelector(".js-staff-attendance-staff-total");
+    const attendanceRecordPaginationFooter = shell.querySelector('[data-staff-pagination="attendance-records"]');
+    const attendanceRecordPaginationTotal = attendanceRecordPaginationFooter?.querySelector(".js-staff-attendance-records-total");
     const attendanceSearch = shell.querySelector(".js-staff-attendance-search");
     const attendanceModeButtons = Array.from(shell.querySelectorAll("[data-staff-attendance-mode]"));
     const attendanceExport = shell.querySelector(".js-staff-attendance-export");
@@ -10226,16 +15393,30 @@ function initStaffToolbarActions(shell) {
     const newAttendanceModal = newAttendanceModalEl && typeof bootstrap !== "undefined" ? bootstrap.Modal.getOrCreateInstance(newAttendanceModalEl) : null;
     let attendanceMode = "staff";
     let mutableAttendanceRows = attendanceRecordRows.slice();
+    const attendanceStaffPagination = createBottomPagination({
+        container: attendanceStaffPaginationFooter,
+        getItems: () => attendanceStaffRows,
+        totalNode: attendanceStaffPaginationTotal,
+        scrollTarget: shell.querySelector('[data-staff-attendance-view="staff"]'),
+    });
+    const attendanceRecordPagination = createBottomPagination({
+        container: attendanceRecordPaginationFooter,
+        getItems: () => mutableAttendanceRows,
+        totalNode: attendanceRecordPaginationTotal,
+        scrollTarget: shell.querySelector('[data-staff-attendance-view="attendance"]'),
+    });
     const applyAttendanceFilter = () => {
         const query = text(attendanceSearch?.value);
         attendanceStaffRows.forEach((row) => {
             const matchesQuery = !query || text(row.dataset.name).includes(query);
-            row.hidden = attendanceMode !== "staff" || !matchesQuery;
+            row.dataset.paginationMatch = attendanceMode === "staff" && matchesQuery ? "1" : "0";
         });
         mutableAttendanceRows.forEach((row) => {
             const matchesQuery = !query || text(row.dataset.name).includes(query);
-            row.hidden = attendanceMode !== "attendance" || !matchesQuery;
+            row.dataset.paginationMatch = attendanceMode === "attendance" && matchesQuery ? "1" : "0";
         });
+        attendanceStaffPagination.refresh();
+        attendanceRecordPagination.refresh();
     };
     const applyAttendanceMode = (mode) => {
         attendanceMode = mode || "staff";
@@ -10251,7 +15432,7 @@ function initStaffToolbarActions(shell) {
         applyAttendanceFilter();
     };
     const attendanceRowsForExport = () => mutableAttendanceRows
-        .filter((row) => !row.hidden)
+        .filter((row) => row.dataset.paginationMatch !== "0")
         .map((row) => Array.from(row.querySelectorAll("td")).slice(0, -1).map((cell) => cell.textContent.trim().replace(/\s+/g, " ")));
     const exportAttendance = (format) => {
         const rows = [
@@ -10334,36 +15515,27 @@ function initStaffToolbarActions(shell) {
                 attendanceDetailDrawerEl.classList.add("is-open");
             });
         };
-        const commitAttendanceDetail = () => {
+        const commitAttendanceDetail = async () => {
             const staffRow = detailState.row;
             if (!staffRow) {
                 closeAttendanceDetailDrawer();
                 return;
             }
-            const nextStatus = detailState.active ? "Aktif" : "Nonaktif";
-            const nextStatusLabel = detailState.active ? "Active" : "Deactive";
-            staffRow.dataset.status = nextStatus;
-            staffRow.dataset.attendancePose = detailState.pose;
-            staffRow.dataset.attendanceUploadedPose = detailState.uploaded;
-            const faceCell = staffRow.querySelector("[data-attendance-face-cell]");
-            const statusPill = staffRow.querySelector("[data-attendance-status-pill]");
-            const lastModified = staffRow.querySelector("[data-attendance-last-modified]");
-            if (faceCell) {
-                faceCell.textContent = detailState.uploaded ? detailState.uploaded : "-";
+            try {
+                const formData = new FormData();
+                formData.append("_csrf", staffApiCsrfToken());
+                formData.append("staff_id", staffRow.dataset.staffId || "");
+                formData.append("active", detailState.active ? "1" : "0");
+                formData.append("pose", detailState.pose || "Right Tilt");
+                formData.append("uploaded_pose", detailState.uploaded || "");
+                await staffApiRequest("/api/staff/attendance/profile", {
+                    method: "POST",
+                    body: formData,
+                });
+                window.location.reload();
+            } catch (error) {
+                alert(error.message || "Simpan profil attendance gagal.");
             }
-            if (statusPill) {
-                statusPill.textContent = nextStatusLabel;
-                statusPill.classList.toggle("is-inactive", !detailState.active);
-            }
-            if (lastModified) {
-                lastModified.textContent = "23 Apr 2026";
-            }
-            attendanceRecordRows.forEach((row) => {
-                if ((row.dataset.name || "") === detailState.name) {
-                    row.dataset.status = nextStatus;
-                }
-            });
-            closeAttendanceDetailDrawer();
         };
         shell.querySelectorAll("[data-attendance-edit]").forEach((button) => {
             button.addEventListener("click", () => {
@@ -10421,7 +15593,7 @@ function initStaffToolbarActions(shell) {
         '"': "&quot;",
         "'": "&#039;",
     })[char]);
-    const createAttendanceRow = ({ date, staffName, shiftStart, shiftEnd, clockIn, clockOut }) => {
+        const createAttendanceRow = ({ date, staffName, shiftStart, shiftEnd, clockIn, clockOut }) => {
         const shiftStartMinutes = timeToMinutes(shiftStart);
         const shiftEndMinutes = timeToMinutes(shiftEnd);
         const clockInMinutes = timeToMinutes(clockIn);
@@ -10536,25 +15708,38 @@ function initStaffToolbarActions(shell) {
             if (timePicker) timePicker.hidden = true;
             newAttendanceModal?.show();
         });
-        saveAttendance?.addEventListener("click", () => {
-            const staffName = staffSelect?.value?.trim() || "";
-            if (!staffName) {
+        saveAttendance?.addEventListener("click", async () => {
+            const staffId = staffSelect?.value?.trim() || "";
+            const staffName = staffSelect?.selectedOptions?.[0]?.dataset.staffName || "";
+            if (!staffId || !staffName) {
                 staffSelect?.classList.add("is-invalid");
                 staffSelect?.focus();
                 return;
             }
-            const row = createAttendanceRow({
-                date: dateInput?.value || formatYmd(new Date()),
-                staffName,
-                shiftStart: timeValues.shiftStart,
-                shiftEnd: timeValues.shiftEnd,
-                clockIn: timeValues.clockIn,
-                clockOut: timeValues.clockOut,
-            });
-            attendanceTableBody?.prepend(row);
-            mutableAttendanceRows = [row, ...mutableAttendanceRows];
-            applyAttendanceFilter();
-            newAttendanceModal?.hide();
+            const clockInMinutes = timeToMinutes(timeValues.clockIn);
+            const shiftStartMinutes = timeToMinutes(timeValues.shiftStart);
+            const clockOutMinutes = timeToMinutes(timeValues.clockOut);
+            const shiftEndMinutes = timeToMinutes(timeValues.shiftEnd);
+            const status = clockInMinutes > shiftStartMinutes ? "Late" : (clockOutMinutes > shiftEndMinutes ? "Overtime" : "Ontime");
+            try {
+                const formData = new FormData();
+                formData.append("_csrf", staffApiCsrfToken());
+                formData.append("staff_id", staffId);
+                formData.append("attendance_date", dateInput?.value || formatYmd(new Date()));
+                formData.append("shift_start", timeValues.shiftStart);
+                formData.append("shift_end", timeValues.shiftEnd);
+                formData.append("clock_in", timeValues.clockIn);
+                formData.append("clock_out", timeValues.clockOut);
+                formData.append("status", status);
+                formData.append("source", status);
+                await staffApiRequest("/api/staff/attendance/save", {
+                    method: "POST",
+                    body: formData,
+                });
+                window.location.reload();
+            } catch (error) {
+                alert(error.message || "Simpan attendance gagal.");
+            }
         });
     }
     const attendanceDateModal = document.getElementById("staffAttendanceDateFilterModal");
@@ -10682,10 +15867,18 @@ function initStaffToolbarActions(shell) {
     const commissionSearch = shell.querySelector(".js-staff-commission-search");
     const commissionRows = Array.from(shell.querySelectorAll("[data-commission-row]"));
     const commissionEmpty = shell.querySelector("[data-commission-empty]");
+    const commissionPaginationFooter = shell.querySelector('[data-staff-pagination="commission"]');
+    const commissionPaginationTotal = commissionPaginationFooter?.querySelector(".js-staff-commission-total");
     const commissionAdjustModalEl = document.getElementById("staffCommissionAdjustModal");
     let activeCommissionStaff = "all";
     let activeCommissionStart = "";
     let activeCommissionEnd = "";
+    const commissionPagination = createBottomPagination({
+        container: commissionPaginationFooter,
+        getItems: () => commissionRows,
+        totalNode: commissionPaginationTotal,
+        scrollTarget: shell.querySelector(".staff-commission-table"),
+    });
     const formatCommissionMoney = (value) => new Intl.NumberFormat("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value) || 0);
     const parseCommissionNumber = (value) => {
         const normalized = String(value || "").replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
@@ -10829,10 +16022,12 @@ function initStaffToolbarActions(shell) {
             const rowDate = row.dataset.commissionDate || "";
             const matchesStart = !activeCommissionStart || rowDate >= activeCommissionStart;
             const matchesEnd = !activeCommissionEnd || rowDate <= activeCommissionEnd;
-            row.hidden = !matchesQuery || !matchesStaff || !matchesStart || !matchesEnd;
-            if (!row.hidden) visibleCount += 1;
+            const isMatch = matchesQuery && matchesStaff && matchesStart && matchesEnd;
+            row.dataset.paginationMatch = isMatch ? "1" : "0";
+            if (isMatch) visibleCount += 1;
         });
         if (commissionEmpty) commissionEmpty.parentElement.hidden = visibleCount > 0;
+        commissionPagination.refresh();
     };
     commissionStaffMenu?.addEventListener("click", (event) => {
         const item = event.target instanceof HTMLElement ? event.target.closest("[data-commission-staff]") : null;
@@ -11428,16 +16623,43 @@ function initStaffWorkModal(shell) {
             });
     };
 
-    const saveWorkHours = () => {
-        selectedCells().forEach((cell) => {
-            renderCellHours(cell, state.shifts);
-        });
-        modal?.hide();
+    const saveWorkHours = async () => {
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            formData.append("staff_id", state.staffId);
+            formData.append("date", state.date);
+            formData.append("repeat", state.repeat);
+            formData.append("repeat_end", state.repeatEnd);
+            formData.append("repeat_end_date", state.repeatEndDate || "");
+            formData.append("shifts_json", JSON.stringify(state.shifts));
+            await staffApiRequest("/api/staff/shifts/save", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Simpan jam kerja gagal.");
+        }
     };
 
-    const deleteWorkHours = () => {
-        selectedCells().forEach(clearCellHours);
-        modal?.hide();
+    const deleteWorkHours = async () => {
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            formData.append("staff_id", state.staffId);
+            formData.append("date", state.date);
+            formData.append("repeat", state.repeat);
+            formData.append("repeat_end", state.repeatEnd);
+            formData.append("repeat_end_date", state.repeatEndDate || "");
+            await staffApiRequest("/api/staff/shifts/delete", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Hapus jam kerja gagal.");
+        }
     };
 
     shell.addEventListener("click", (event) => {
@@ -11527,6 +16749,40 @@ function initStaffWorkModal(shell) {
 }
 
 function initStaffDatePickers({ shell, weekRange, monthRange, weekPicker }) {
+    let shiftMap = {};
+    try {
+        shiftMap = JSON.parse(shell.dataset.staffShifts || "{}");
+    } catch (_error) {
+        shiftMap = {};
+    }
+    const getShiftPayload = (staffId, date) => {
+        const shifts = shiftMap?.[String(staffId)]?.[String(date)] || [];
+        if (!Array.isArray(shifts) || shifts.length === 0) {
+            return null;
+        }
+        return {
+            shifts,
+            repeat: shifts[0]?.repeat_mode || "none",
+        };
+    };
+    const renderShiftCellContent = (staffId, date, todayIso) => {
+        const payload = getShiftPayload(staffId, date);
+        if (!payload) {
+            return date === todayIso
+                ? '<span class="staff-schedule-hours">00:00 - 23:55</span>'
+                : '<button class="staff-schedule-add" type="button" aria-label="Tambah shift"><i class="bi bi-plus-lg"></i></button>';
+        }
+        const labels = payload.shifts.map((shift) => `<span>${shift.start} - ${shift.end}</span>`).join("");
+        return `<div class="staff-work-selected-hours">${labels}</div>`;
+    };
+    const renderShiftCellAttrs = (staffId, date) => {
+        const payload = getShiftPayload(staffId, date);
+        if (!payload) {
+            return "";
+        }
+        const json = String(JSON.stringify(payload.shifts)).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+        return ` data-work-shifts="${json}" data-work-repeat="${payload.repeat}"`;
+    };
     // Week picker (auto-week range like 06 Apr - 12 Apr 2025)
     if (weekPicker && typeof flatpickr !== "undefined") {
         const label = weekRange?.querySelector("span");
@@ -11583,9 +16839,10 @@ function initStaffDatePickers({ shell, weekRange, monthRange, weekPicker }) {
                 row.innerHTML = days.map((day) => {
                     const date = iso(day);
                     const labelText = `${dayNamesEn[day.getDay()]}, ${day.getDate()} ${day.toLocaleDateString("en-US", { month: "short" })} ${day.getFullYear()}`;
+                    const payload = getShiftPayload(staffId, date);
                     return `
-                        <div class="staff-schedule-cell" data-staff-work-cell data-staff-id="${attr(staffId)}" data-staff-name="${attr(staffName)}" data-date="${attr(date)}" data-day-index="${day.getDay()}" data-day-label="${attr(labelText)}">
-                            ${date === todayIso ? '<span class="staff-schedule-hours">00:00 - 23:55</span>' : '<button class="staff-schedule-add" type="button" aria-label="Tambah shift"><i class="bi bi-plus-lg"></i></button>'}
+                        <div class="staff-schedule-cell${payload ? " is-filled" : ""}" data-staff-work-cell data-staff-id="${attr(staffId)}" data-staff-name="${attr(staffName)}" data-date="${attr(date)}" data-day-index="${day.getDay()}" data-day-label="${attr(labelText)}"${renderShiftCellAttrs(staffId, date)}>
+                            ${renderShiftCellContent(staffId, date, todayIso)}
                         </div>
                     `;
                 }).join("");
@@ -11709,7 +16966,6 @@ function initStaffDatePickers({ shell, weekRange, monthRange, weekPicker }) {
             const days = Array.from({ length: daysInMonth }, (_, idx) => idx + 1);
             const today = new Date();
             const todayMatch = today.getFullYear() === state.year && today.getMonth() === state.month ? today.getDate() : -1;
-            const filledDays = highlightedDays(daysInMonth);
             const attr = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
                 "&": "&amp;",
                 "<": "&lt;",
@@ -11732,11 +16988,11 @@ function initStaffDatePickers({ shell, weekRange, monthRange, weekPicker }) {
                 const staffName = row.dataset.staffName || "Staf";
                 row.innerHTML = days
                     .map((day) => {
-                        const filled = filledDays.includes(day) ? " is-filled" : "";
                         const date = new Date(state.year, state.month, day);
                         const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
                         const dayLabel = `${date.toLocaleDateString("en-US", { weekday: "long" })}, ${date.getDate()} ${monthNames[date.getMonth()]} ${date.getFullYear()}`;
-                        return `<div class="staff-month-cell${filled}" data-staff-work-cell data-staff-id="${attr(staffId)}" data-staff-name="${attr(staffName)}" data-date="${attr(dateStr)}" data-day-index="${date.getDay()}" data-day-label="${attr(dayLabel)}"><button class="staff-schedule-add" type="button" aria-label="Tambah shift"><i class="bi bi-plus-lg"></i></button></div>`;
+                        const payload = getShiftPayload(staffId, dateStr);
+                        return `<div class="staff-month-cell${payload ? " is-filled" : ""}" data-staff-work-cell data-staff-id="${attr(staffId)}" data-staff-name="${attr(staffName)}" data-date="${attr(dateStr)}" data-day-index="${date.getDay()}" data-day-label="${attr(dayLabel)}"${renderShiftCellAttrs(staffId, dateStr)}>${payload ? "" : '<button class="staff-schedule-add" type="button" aria-label="Tambah shift"><i class="bi bi-plus-lg"></i></button>'}</div>`;
                     })
                     .join("");
             });
@@ -11869,11 +17125,172 @@ function initServicesPage() {
         return;
     }
 
+    const servicesApiRequest = async (url, options = {}) => {
+        const response = await fetch(url, {
+            credentials: "same-origin",
+            ...options,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.message || "Permintaan layanan gagal diproses.");
+        }
+        return payload;
+    };
+
     const tabs = Array.from(shell.querySelectorAll(".services-tab"));
     const panels = Array.from(shell.querySelectorAll(".services-panel"));
     const fab = shell.querySelector(".js-services-fab");
+    const serviceGroupGrid = shell.querySelector(".services-group-grid");
+    const serviceGroupModalEl = document.getElementById("serviceGroupModal");
+    const serviceGroupModal = serviceGroupModalEl ? bootstrap.Modal.getOrCreateInstance(serviceGroupModalEl) : null;
+    const serviceGroupModalTitle = serviceGroupModalEl?.querySelector("[data-service-group-modal-title]");
+    const serviceGroupForm = serviceGroupModalEl?.querySelector("[data-service-group-form]");
+    const serviceGroupIdInput = serviceGroupModalEl?.querySelector("[data-service-group-id]");
+    const serviceGroupNameInput = serviceGroupModalEl?.querySelector("#serviceGroupName");
+    const serviceGroupDescriptionInput = serviceGroupModalEl?.querySelector("#serviceGroupDescription");
+    const serviceGroupColorButtons = Array.from(serviceGroupModalEl?.querySelectorAll("[data-service-color]") || []);
+    const serviceGroupCustomColorTrigger = serviceGroupModalEl?.querySelector("[data-service-custom-color-trigger]");
+    const serviceGroupCustomColorInput = serviceGroupModalEl?.querySelector("[data-service-custom-color]");
+    const serviceGroupDeleteButton = serviceGroupModalEl?.querySelector("[data-service-group-delete]");
+    const serviceGroupSaveButton = serviceGroupModalEl?.querySelector("[data-service-group-save]");
     const pickerTitle = document.querySelector(".js-service-picker-title");
     const menuToggles = Array.from(shell.querySelectorAll("[data-services-menu-toggle]"));
+    const serviceGroupCards = Array.from(shell.querySelectorAll("[data-service-group-card]"));
+    const groupSearchInput = shell.querySelector('[data-services-search="groups"]');
+    const servicesSearchInput = shell.querySelector('[data-services-search="services"]');
+    const packagesSearchInput = shell.querySelector('[data-services-search="packages"]');
+    const servicesGroupLabel = shell.querySelector('[data-services-group-label="services"]');
+    const packagesGroupLabel = shell.querySelector('[data-services-group-label="packages"]');
+    const groupPickerModalEl = document.getElementById("serviceGroupPickerModal");
+    const groupPickerModal = groupPickerModalEl ? bootstrap.Modal.getOrCreateInstance(groupPickerModalEl) : null;
+    const createModalEl = document.getElementById("serviceCreateModal");
+    const createModal = createModalEl ? bootstrap.Modal.getOrCreateInstance(createModalEl, { keyboard: false }) : null;
+    const createModalTitle = createModalEl?.querySelector("[data-service-create-title]");
+    const createSaveButton = createModalEl?.querySelector("[data-service-create-save]");
+    const createDeleteButton = createModalEl?.querySelector("[data-service-create-delete]");
+    const createNameInput = createModalEl?.querySelector("#serviceCreateName");
+    const createDescriptionInput = createModalEl?.querySelector("#serviceCreateDescription");
+    const createTypeInput = createModalEl?.querySelector("#serviceCreateType");
+    const createMediaUploadButton = createModalEl?.querySelector(".services-create-media-btn");
+    const pickerOptions = Array.from(document.querySelectorAll("[data-service-picker-option]"));
+    const pickerNextButton = groupPickerModalEl?.querySelector("[data-service-picker-next]");
+    const createTabs = Array.from(createModalEl?.querySelectorAll("[data-service-create-tab]") || []);
+    const createPanels = Array.from(createModalEl?.querySelectorAll("[data-service-create-panel]") || []);
+    const segmentedButtons = Array.from(createModalEl?.querySelectorAll(".services-create-segmented button") || []);
+    const createLocationAll = createModalEl?.querySelector("[data-service-location-all]");
+    const createLocationChecks = Array.from(createModalEl?.querySelectorAll("[data-service-location-check]") || []);
+    const createStaffAll = createModalEl?.querySelector("[data-service-staff-all]");
+    const createStaffChecks = Array.from(createModalEl?.querySelectorAll("[data-service-staff-check]") || []);
+    const variantList = createModalEl?.querySelector("[data-service-variant-list]");
+    const variantTemplate = document.getElementById("serviceVariantTemplate");
+    const firstVariantSection = createModalEl?.querySelector("[data-service-variant-section]");
+    const durationInput = firstVariantSection?.querySelector("[data-service-variant-duration]");
+    const variantNameInput = firstVariantSection?.querySelector("[data-service-variant-name]");
+    const retailInput = firstVariantSection?.querySelector("[data-service-variant-retail]");
+    const specialInput = firstVariantSection?.querySelector("[data-service-variant-special]");
+    const locationSummary = firstVariantSection?.querySelector("[data-service-location-pricing-summary]");
+    const costSummary = firstVariantSection?.querySelector("[data-service-cost-summary]");
+    const availabilitySummary = firstVariantSection?.querySelector("[data-service-availability-summary]");
+    const drawerLayer = createModalEl?.querySelector("[data-service-drawer-layer]");
+    const drawerBackdrop = createModalEl?.querySelector("[data-service-drawer-close]");
+    const locationDrawer = createModalEl?.querySelector("[data-service-location-pricing-drawer]");
+    const costDrawer = createModalEl?.querySelector("[data-service-cost-drawer]");
+    const availabilityDrawer = createModalEl?.querySelector("[data-service-availability-drawer]");
+    const drawerCloseButtons = Array.from(createModalEl?.querySelectorAll("[data-service-drawer-close]") || []);
+    const locationSharedToggle = createModalEl?.querySelector("[data-service-location-shared-toggle]");
+    const locationRetailInput = createModalEl?.querySelector("[data-service-location-retail-input]");
+    const locationSpecialInput = createModalEl?.querySelector("[data-service-location-special-input]");
+    const locationApplyButton = createModalEl?.querySelector("[data-service-location-pricing-apply]");
+    const costPriceInput = createModalEl?.querySelector("[data-service-cost-price-input]");
+    const productSearchInput = createModalEl?.querySelector("[data-service-product-search]");
+    const productDropdown = createModalEl?.querySelector("[data-service-product-dropdown]");
+    const productSearchWrap = productSearchInput?.closest(".services-create-drawer__search--product");
+    const productOptions = Array.from(createModalEl?.querySelectorAll("[data-service-product-option]") || []);
+    const selectedProductsContainer = createModalEl?.querySelector("[data-service-selected-products]");
+    const costApplyButton = createModalEl?.querySelector("[data-service-cost-apply]");
+    const availabilityEnabledToggle = createModalEl?.querySelector("[data-service-availability-enabled]");
+    const availabilityPanel = createModalEl?.querySelector("[data-service-availability-panel]");
+    const availabilityModeButtons = Array.from(createModalEl?.querySelectorAll("[data-service-availability-mode]") || []);
+    const availabilityContents = Array.from(createModalEl?.querySelectorAll("[data-service-availability-content]") || []);
+    const dateButtons = Array.from(createModalEl?.querySelectorAll("[data-service-date-option]") || []);
+    const selectedDatesContainer = createModalEl?.querySelector("[data-service-selected-dates]");
+    const weekdayOptions = Array.from(createModalEl?.querySelectorAll("[data-service-weekday-option]") || []);
+    const availabilityApplyButton = createModalEl?.querySelector("[data-service-availability-apply]");
+    const settingsExtraTimeType = createModalEl?.querySelector("[data-service-settings-extra-time-type]");
+    const settingsDurationWrap = createModalEl?.querySelector("[data-service-settings-duration]");
+    const settingsDurationInput = createModalEl?.querySelector("[data-service-settings-duration-input]");
+    const settingsOnlineBookable = createModalEl?.querySelector("[data-service-online-bookable]");
+    const settingsCommissionEnabled = createModalEl?.querySelector("[data-service-commission-enabled]");
+    const settingsAtCustomerLocation = createModalEl?.querySelector("[data-service-at-customer-location]");
+    const packageModalEl = document.getElementById("servicePackageModal");
+    const packageModal = packageModalEl ? bootstrap.Modal.getOrCreateInstance(packageModalEl) : null;
+    const packageModalTitle = packageModalEl?.querySelector("[data-service-package-title]");
+    const packageIdInput = packageModalEl?.querySelector("[data-service-package-id]");
+    const packageGroupInput = packageModalEl?.querySelector("[data-service-package-group]");
+    const packageNameInput = packageModalEl?.querySelector("[data-service-package-name]");
+    const packageDescriptionInput = packageModalEl?.querySelector("[data-service-package-description]");
+    const packagePriceInput = packageModalEl?.querySelector("[data-service-package-price]");
+    const packageItemsInput = packageModalEl?.querySelector("[data-service-package-items]");
+    const packagePricingModeInput = packageModalEl?.querySelector("[data-service-package-pricing-mode-input]");
+    const packageDiscountValueInput = packageModalEl?.querySelector("[data-service-package-discount-value]");
+    const packagePricingModeButtons = Array.from(packageModalEl?.querySelectorAll("[data-service-package-pricing-mode]") || []);
+    const packagePricePrefix = packageModalEl?.querySelector("[data-service-package-price-prefix]");
+    const packagePriceSuffix = packageModalEl?.querySelector("[data-service-package-price-suffix]");
+    const packagePriceHelp = packageModalEl?.querySelector("[data-service-package-price-help]");
+    const packageAudienceInput = packageModalEl?.querySelector("[data-service-package-audience]");
+    const packageAudienceButtons = Array.from(packageModalEl?.querySelectorAll("[data-service-package-audience-option]") || []);
+    const packageOpenPickerButton = packageModalEl?.querySelector("[data-service-package-open-picker]");
+    const packageSelectedList = packageModalEl?.querySelector("[data-service-package-selected-list]");
+    const packageEmptyState = packageModalEl?.querySelector("[data-service-package-empty]");
+    const packageTotalsCard = packageModalEl?.querySelector("[data-service-package-totals-card]");
+    const packageTotalDuration = packageModalEl?.querySelector("[data-service-package-total-duration]");
+    const packageTotalPrice = packageModalEl?.querySelector("[data-service-package-total-price]");
+    const packageSelectionSummary = packageModalEl?.querySelector("[data-service-package-selection-summary]");
+    const packageItemEditorWrap = packageModalEl?.querySelector("[data-service-package-item-editor]");
+    const packageItemEditorTitle = packageModalEl?.querySelector("[data-service-package-item-editor-title]");
+    const packageItemEditorMeta = packageModalEl?.querySelector("[data-service-package-item-editor-meta]");
+    const packageItemEditorPrice = packageModalEl?.querySelector("[data-service-package-item-editor-price]");
+    const packageItemEditorTypeToggle = packageModalEl?.querySelector("[data-service-package-item-editor-type-toggle]");
+    const packageItemEditorTypeLabel = packageModalEl?.querySelector("[data-service-package-item-editor-type-label]");
+    const packageItemEditorTypeMenu = packageModalEl?.querySelector("[data-service-package-item-editor-type-menu]");
+    const packageItemEditorTypeButtons = Array.from(packageModalEl?.querySelectorAll("[data-service-package-item-editor-type]") || []);
+    const packageItemEditorQtyWrap = packageModalEl?.querySelector("[data-service-package-item-editor-qty]");
+    const packageItemEditorQtyValue = packageModalEl?.querySelector("[data-service-package-item-editor-qty-value]");
+    const packageItemEditorQtyButtons = Array.from(packageModalEl?.querySelectorAll("[data-service-package-item-editor-qty-change]") || []);
+    const packageItemEditorTimeWrap = packageModalEl?.querySelector("[data-service-package-item-editor-time]");
+    const packageItemEditorTimeValue = packageModalEl?.querySelector("[data-service-package-item-editor-time-value]");
+    const packageItemEditorTimeButtons = Array.from(packageModalEl?.querySelectorAll("[data-service-package-item-editor-time-change]") || []);
+    const packageItemEditorApplyButton = packageModalEl?.querySelector("[data-service-package-item-editor-apply]");
+    const packageItemEditorCloseButtons = Array.from(packageModalEl?.querySelectorAll("[data-service-package-item-editor-close]") || []);
+    const packageSaveButton = packageModalEl?.querySelector("[data-service-package-save]");
+    const packageDeleteButton = packageModalEl?.querySelector("[data-service-package-delete]");
+    const packageItemModalEl = document.getElementById("servicePackageItemModal");
+    const packageItemModal = packageItemModalEl ? bootstrap.Modal.getOrCreateInstance(packageItemModalEl) : null;
+    const packageItemSearchInput = packageItemModalEl?.querySelector("[data-service-package-item-search]");
+    const packageItemCatalogButtons = Array.from(packageItemModalEl?.querySelectorAll("[data-service-package-catalog]") || []);
+    const packageItemGroupButtons = Array.from(packageItemModalEl?.querySelectorAll("[data-service-package-group-filter]") || []);
+    const packageItemOptions = Array.from(packageItemModalEl?.querySelectorAll("[data-package-item-option]") || []);
+    const packageItemEmpty = packageItemModalEl?.querySelector("[data-service-package-item-empty]");
+    const packageItemSummary = packageItemModalEl?.querySelector("[data-service-package-item-summary]");
+    const packageItemFooterSummary = packageItemModalEl?.querySelector("[data-service-package-item-footer-summary]");
+    const packageItemApplyButton = packageItemModalEl?.querySelector("[data-service-package-item-apply]");
+    const packagePickerSelectedWrap = packageItemModalEl?.querySelector("[data-service-package-picker-selected]");
+    const packagePickerSelectedList = packageItemModalEl?.querySelector("[data-service-package-picker-selected-list]");
+    const packagePickerCollapseButton = packageItemModalEl?.querySelector("[data-service-package-picker-collapse]");
+    const packageChoiceWrap = packageItemModalEl?.querySelector("[data-service-package-choice]");
+    const packageChoiceTitle = packageItemModalEl?.querySelector("[data-service-package-choice-title]");
+    const packageChoiceTagline = packageItemModalEl?.querySelector("[data-service-package-choice-tagline]");
+    const packageChoiceSubtitle = packageItemModalEl?.querySelector("[data-service-package-choice-subtitle]");
+    const packageChoiceOptionButton = packageItemModalEl?.querySelector("[data-service-package-choice-option]");
+    const packageChoiceOptionTitle = packageItemModalEl?.querySelector("[data-service-package-choice-option-title]");
+    const packageChoiceOptionMeta = packageItemModalEl?.querySelector("[data-service-package-choice-option-meta]");
+    const packageChoiceQtyWrap = packageItemModalEl?.querySelector("[data-service-package-choice-qty]");
+    const packageChoiceQtyValue = packageItemModalEl?.querySelector("[data-service-package-choice-qty-value]");
+    const packageChoiceDecrease = packageItemModalEl?.querySelector("[data-service-package-choice-decrease]");
+    const packageChoiceIncrease = packageItemModalEl?.querySelector("[data-service-package-choice-increase]");
+    const packageChoiceApplyButton = packageItemModalEl?.querySelector("[data-service-package-choice-apply]");
+    const packageChoiceCloseButtons = Array.from(packageItemModalEl?.querySelectorAll("[data-service-package-choice-close]") || []);
+    const cardImageInput = document.querySelector("[data-services-card-image-input]");
     const fabConfig = {
         groups: {
             target: "#serviceGroupModal",
@@ -11891,11 +17308,1535 @@ function initServicesPage() {
             title: "Pilih Grup Layanan untuk Paket Baru",
         },
     };
-
+    let selectedPickerGroup = null;
+    let currentPickerFlow = "groups";
+    let activeDrawerName = null;
+    let activeVariantSection = null;
+    let editingGroupCard = null;
+    let editingServiceCard = null;
+    let editingPackageCard = null;
+    let activeGroupColor = serviceGroupCustomColorInput?.value || "#76b6e8";
+    let activeServicesGroupFilter = "all";
+    let activePackagesGroupFilter = "all";
+    let activePackagePickerCatalog = "services";
+    let activePackagePickerGroupFilter = "all";
+    let activeCardImageTrigger = null;
+    let packagePricingMode = "service";
+    let packageCustomPriceValue = 0;
+    let packageAudience = "all";
+    let packageSelectedItems = [];
+    let packagePickerCollapsed = false;
+    let activePackageChoiceItem = null;
+    let activePackageChoiceQty = 1;
+    let activePackageEditingItem = null;
+    let currentServiceImageDataUrl = "";
+    const selectedProducts = new Map();
+    const variantSectionStates = new WeakMap();
+    const availabilityState = {
+        enabled: false,
+        mode: "specific",
+        dates: new Set(dateButtons.filter((button) => button.classList.contains("is-selected")).map((button) => button.dataset.dateValue || "")),
+        weekdays: new Set(),
+    };
+    const createDefaultVariantState = () => ({
+        duration: "Select",
+        name: "",
+        retailPrice: "Rp 0",
+        specialPrice: "Rp 0",
+        location: {
+            useSharedPricing: true,
+            retailPrice: "Rp 0",
+            specialPrice: "Rp 0",
+            summary: "Semua lokasi memiliki harga yang sama",
+        },
+        cost: {
+            summary: "Rp 0 • 0 Produk",
+            costPrice: "Rp 0",
+            products: [],
+        },
+        availability: {
+            summary: "Nonaktif",
+            enabled: false,
+            mode: "specific",
+            dates: [],
+            weekdays: [],
+        },
+    });
+    const initialEditorState = createDefaultVariantState();
     const closeMenus = () => {
         shell.querySelectorAll("[data-services-menu].is-open").forEach((menu) => {
             menu.classList.remove("is-open");
         });
+    };
+    const normalizeText = (value) => String(value || "").toLowerCase().trim();
+    const escapeMarkup = (value) => String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    const getGroupCards = () => Array.from(shell.querySelectorAll("[data-service-group-card]"));
+    const getServiceCards = () => Array.from(shell.querySelectorAll("[data-service-card]"));
+    const getPackageCards = () => Array.from(shell.querySelectorAll("[data-package-card]"));
+    const parseGroupIds = (value) => String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+    const setCardVisibility = (element, visible) => {
+        if (element instanceof HTMLElement) {
+            element.hidden = !visible;
+        }
+    };
+    const setCardImage = (trigger, imageUrl) => {
+        if (!(trigger instanceof HTMLElement)) {
+            return;
+        }
+        const icon = trigger.querySelector("i");
+        trigger.style.backgroundImage = imageUrl ? `url("${imageUrl}")` : "";
+        trigger.classList.toggle("is-photo", Boolean(imageUrl));
+        if (icon instanceof HTMLElement) {
+            icon.hidden = Boolean(imageUrl);
+        }
+    };
+    const syncSegmentedAudience = (audienceLabel) => {
+        const normalized = normalizeText(audienceLabel);
+        segmentedButtons.forEach((button) => {
+            const buttonLabel = normalizeText(button.textContent);
+            button.classList.toggle("is-active", buttonLabel === normalized);
+        });
+    };
+    const getActiveAudienceLabel = () => segmentedButtons.find((button) => button.classList.contains("is-active"))?.textContent?.trim() || "Semua";
+    const parseJsonData = (value, fallback) => {
+        if (typeof value !== "string" || !value) {
+            return fallback;
+        }
+        try {
+            const parsed = JSON.parse(value);
+            return parsed ?? fallback;
+        } catch (error) {
+            return fallback;
+        }
+    };
+    const syncServiceStaffChecks = () => {
+        if (createStaffAll instanceof HTMLInputElement) {
+            createStaffAll.checked = createStaffChecks.length > 0 && createStaffChecks.every((check) => check.checked);
+        }
+    };
+    const readServiceVariantPayload = () => {
+        return getVariantSections().map((section) => {
+            const state = readSectionState(section);
+            const durationValue = parseInt(String(state.duration || "").replace(/[^\d]/g, ""), 10) || 0;
+            return {
+                variant_name: String(state.name || "").trim(),
+                duration_minutes: durationValue,
+                price: parseRupiah(state.retailPrice || 0),
+                special_price: parseRupiah(state.specialPrice || 0),
+                location_pricing: state.location || null,
+                cost_price: parseRupiah(state.cost?.costPrice || 0),
+                cost_products: Array.isArray(state.cost?.products) ? state.cost.products : [],
+                availability: state.availability || null,
+            };
+        }).filter((variant, index) => {
+            return index === 0
+                || variant.variant_name
+                || variant.duration_minutes > 0
+                || variant.price > 0
+                || variant.special_price > 0;
+        });
+    };
+
+    const toSafeNumber = (value) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const formatRupiah = (value) => `Rp ${toSafeNumber(value).toLocaleString("id-ID")}`;
+    const formatRupiahDetailed = (value) => `Rp ${toSafeNumber(value).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const parseRupiah = (value) => {
+        const digits = String(value || "").replace(/[^\d]/g, "");
+        return digits ? Number(digits) : 0;
+    };
+    const formatProductCount = (count) => `${count} Produk`;
+    const formatDateLabel = (dateValue) => {
+        const [year, month, day] = String(dateValue || "").split("-");
+        const date = new Date(Number(year), Number(month) - 1, Number(day));
+        if (Number.isNaN(date.getTime())) {
+            return dateValue;
+        }
+        return new Intl.DateTimeFormat("id-ID", {
+            weekday: "short",
+            day: "2-digit",
+            month: "long",
+            year: "numeric",
+        }).format(date);
+    };
+    const weekdayLabels = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+    const syncSettingsDuration = () => {
+        if (!settingsExtraTimeType || !settingsDurationWrap) {
+            return;
+        }
+        const needsDuration = settingsExtraTimeType.value !== "none";
+        settingsDurationWrap.hidden = !needsDuration;
+        if (!needsDuration && settingsDurationInput) {
+            settingsDurationInput.value = "";
+        }
+    };
+    const readPackageBaseTotal = () => packageSelectedItems.reduce((sum, item) => sum + (toSafeNumber(item.price) * Math.max(1, toSafeNumber(item.qty) || 1)), 0);
+    const parsePackageItemDuration = (item) => {
+        const raw = String(item.duration || "").trim();
+        if (!raw) {
+            return 0;
+        }
+        if (/^\d+$/.test(raw)) {
+            return Number(raw);
+        }
+        const hourMatch = raw.match(/(\d+)\s*h/i);
+        const minuteMatch = raw.match(/(\d+)\s*min/i);
+        const hours = hourMatch ? Number(hourMatch[1]) : 0;
+        const minutes = minuteMatch ? Number(minuteMatch[1]) : 0;
+        return (hours * 60) + minutes;
+    };
+    const readPackageItemExtraMinutes = (item) => Math.max(0, toSafeNumber(item.extraTimeMinutes) || 0);
+    const readPackageTotalDuration = () => packageSelectedItems.reduce((sum, item) => sum + parsePackageItemDuration(item) + readPackageItemExtraMinutes(item), 0);
+    const formatPackageDuration = (totalMinutes) => {
+        const safeMinutes = Math.max(0, Number(totalMinutes || 0));
+        const hours = Math.floor(safeMinutes / 60);
+        const minutes = safeMinutes % 60;
+        return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+    };
+    const formatPackageTimeEditorValue = (minutes) => `${Math.max(15, Math.min(1000, toSafeNumber(minutes) || 15))}m`;
+    const getPackageExtraTimeLabel = (value) => {
+        if (value === "processing_after") {
+            return "Pemrosesan waktu setelahnya";
+        }
+        if (value === "blocked_after") {
+            return "Blokir waktu setelahnya";
+        }
+        return "Tidak ada tambahan waktu";
+    };
+    const formatPackageItemMetaText = (item) => {
+        const extraMinutes = readPackageItemExtraMinutes(item);
+        if ((item.type || "service") === "product") {
+            return `${Math.max(1, toSafeNumber(item.qty) || 1)} Item${extraMinutes > 0 ? ` + ${extraMinutes}m` : ""}`;
+        }
+        const baseMinutes = parsePackageItemDuration(item);
+        const baseLabel = `${Math.floor(baseMinutes / 60)}h${baseMinutes % 60}m`;
+        return extraMinutes > 0 ? `${baseLabel} + ${extraMinutes}m` : baseLabel;
+    };
+    const readPackageDiscountPercent = () => {
+        const normalized = String(packageDiscountValueInput?.value || packagePriceInput?.value || "0").replace(/[^\d.,]/g, "").replace(",", ".");
+        const parsed = Number.parseFloat(normalized);
+        if (Number.isNaN(parsed)) {
+            return 0;
+        }
+        return Math.max(0, Math.min(100, parsed));
+    };
+    const readPackageFinalPrice = () => {
+        const baseTotal = readPackageBaseTotal();
+        if (packagePricingMode === "custom") {
+            return Math.max(0, packageCustomPriceValue);
+        }
+        if (packagePricingMode === "discount") {
+            const discount = readPackageDiscountPercent();
+            return Math.max(0, Math.round(baseTotal - ((baseTotal * discount) / 100)));
+        }
+        return baseTotal;
+    };
+    const shouldShowPackageAdjustedPrices = () => {
+        if (packagePricingMode === "service") {
+            return false;
+        }
+        return Math.abs(readPackageFinalPrice() - readPackageBaseTotal()) >= 1;
+    };
+    const readPackageItemOriginalPrice = (item) => toSafeNumber(item.price) * Math.max(1, toSafeNumber(item.qty) || 1);
+    const readPackageItemAdjustedPrice = (item) => {
+        const originalPrice = readPackageItemOriginalPrice(item);
+        const baseTotal = readPackageBaseTotal();
+        const finalTotal = readPackageFinalPrice();
+        if (baseTotal <= 0) {
+            return originalPrice;
+        }
+        return originalPrice * (finalTotal / baseTotal);
+    };
+    const syncPackageTotalsPriceDisplay = () => {
+        if (!packageTotalPrice) {
+            return;
+        }
+        const baseTotal = readPackageBaseTotal();
+        const finalPrice = readPackageFinalPrice();
+        if (shouldShowPackageAdjustedPrices()) {
+            packageTotalPrice.innerHTML = `
+                <small>${escapeMarkup(formatRupiahDetailed(baseTotal))}</small>
+                <strong>${escapeMarkup(formatRupiahDetailed(finalPrice))}</strong>
+            `;
+            return;
+        }
+        packageTotalPrice.innerHTML = `<strong>${escapeMarkup(formatRupiah(finalPrice))}</strong>`;
+    };
+    const syncPackageItemsInput = () => {
+        if (packageItemsInput) {
+            packageItemsInput.value = packageSelectedItems.map((item) => item.type === "product" && Number(item.qty || 1) > 1 ? `${item.name} x${item.qty}` : item.name).join("\n");
+        }
+    };
+    const syncPackageSelectionSummary = () => {
+        if (!packageSelectionSummary) {
+            return;
+        }
+        packageSelectionSummary.innerHTML = `${packageSelectedItems.length} item &bull; ${formatRupiah(readPackageFinalPrice())}`;
+    };
+    const syncPackagePriceField = () => {
+        if (!(packagePriceInput instanceof HTMLInputElement)) {
+            return;
+        }
+        const baseTotal = readPackageBaseTotal();
+        packagePricingModeButtons.forEach((button) => {
+            button.classList.toggle("is-active", (button.dataset.servicePackagePricingMode || "service") === packagePricingMode);
+        });
+        if (packagePricingModeInput instanceof HTMLInputElement) {
+            packagePricingModeInput.value = packagePricingMode;
+        }
+        if (packagePricingMode === "service") {
+            packagePriceInput.readOnly = true;
+            packageCustomPriceValue = baseTotal;
+            packagePriceInput.value = formatRupiah(baseTotal);
+            if (packagePricePrefix) packagePricePrefix.hidden = true;
+            if (packagePriceSuffix) packagePriceSuffix.hidden = true;
+            if (packagePriceHelp) packagePriceHelp.textContent = "Harga dihitung otomatis dari item yang dipilih.";
+        } else if (packagePricingMode === "custom") {
+            packagePriceInput.readOnly = false;
+            const currentValue = parseRupiah(packagePriceInput.value || 0);
+            if (document.activeElement === packagePriceInput) {
+                packageCustomPriceValue = currentValue;
+            } else {
+                if (packageCustomPriceValue <= 0 && currentValue <= 0) {
+                    packageCustomPriceValue = baseTotal;
+                } else if (currentValue > 0) {
+                    packageCustomPriceValue = currentValue;
+                }
+                packagePriceInput.value = formatRupiah(packageCustomPriceValue);
+            }
+            if (packagePricePrefix) packagePricePrefix.hidden = true;
+            if (packagePriceSuffix) packagePriceSuffix.hidden = true;
+            if (packagePriceHelp) packagePriceHelp.textContent = "Masukkan harga paket manual.";
+        } else {
+            const discount = readPackageDiscountPercent();
+            if (packageDiscountValueInput instanceof HTMLInputElement) {
+                packageDiscountValueInput.value = String(discount);
+            }
+            packagePriceInput.readOnly = false;
+            packagePriceInput.value = discount ? String(discount).replace(/\.0+$/, "") : "";
+            if (packagePricePrefix) packagePricePrefix.hidden = true;
+            if (packagePriceSuffix) packagePriceSuffix.hidden = false;
+            if (packagePriceHelp) {
+                packagePriceHelp.textContent = `Diskon dihitung dari total item ${formatRupiah(baseTotal)}. Harga akhir ${formatRupiah(readPackageFinalPrice())}.`;
+            }
+        }
+        syncPackageSelectionSummary();
+        syncPackageTotalsPriceDisplay();
+    };
+    const syncPackageAudienceUI = () => {
+        packageAudienceButtons.forEach((button) => {
+            button.classList.toggle("is-active", (button.dataset.servicePackageAudienceOption || "all") === packageAudience);
+        });
+        if (packageAudienceInput instanceof HTMLInputElement) {
+            packageAudienceInput.value = packageAudience;
+        }
+    };
+    const createFallbackPackageItem = (name) => ({
+        key: `custom:${normalizeText(name)}`,
+        type: "service",
+        id: normalizeText(name),
+        name,
+        price: 0,
+        duration: "",
+        extraTimeType: "none",
+        extraTimeMinutes: 0,
+        groupId: "",
+        groupName: "",
+    });
+    const createPackageItemFromOption = (option) => ({
+        key: option.dataset.itemKey || "",
+        type: option.dataset.itemType || "service",
+        id: option.dataset.itemId || "",
+        name: option.dataset.itemName || "",
+        price: Number(option.dataset.itemPrice || 0),
+        duration: option.dataset.itemDuration || "",
+        brand: option.dataset.itemBrand || "",
+        stock: Number(option.dataset.itemStock || 0),
+        groupId: option.dataset.itemGroupId || "",
+        groupName: option.dataset.itemGroupName || "",
+        qty: 1,
+        extraTimeType: "none",
+        extraTimeMinutes: 0,
+    });
+    const findPackageItemByName = (name) => {
+        const normalizedName = normalizeText(name);
+        const matchedOption = packageItemOptions.find((option) => normalizeText(option.dataset.itemName || "") === normalizedName);
+        return matchedOption ? createPackageItemFromOption(matchedOption) : createFallbackPackageItem(name);
+    };
+    const syncPackageItemOptionSelection = () => {
+        const selectedKeys = new Set(packageSelectedItems.map((item) => item.key));
+        packageItemOptions.forEach((option) => {
+            const isSelected = selectedKeys.has(option.dataset.itemKey || "");
+            option.classList.toggle("is-selected", isSelected);
+            option.setAttribute("aria-pressed", isSelected ? "true" : "false");
+        });
+    };
+    const renderPackageSelectedItems = () => {
+        if (!(packageSelectedList instanceof HTMLElement)) {
+            return;
+        }
+        packageSelectedList.innerHTML = "";
+        if (packageEmptyState instanceof HTMLElement) {
+            packageEmptyState.hidden = packageSelectedItems.length !== 0;
+        }
+        if (packageTotalsCard instanceof HTMLElement) {
+            packageTotalsCard.hidden = packageSelectedItems.length === 0;
+        }
+        packageSelectedList.hidden = packageSelectedItems.length === 0;
+        packageSelectedItems.forEach((item) => {
+            const originalPrice = readPackageItemOriginalPrice(item);
+            const adjustedPrice = readPackageItemAdjustedPrice(item);
+            const showAdjustedPrice = shouldShowPackageAdjustedPrices();
+            const row = document.createElement("div");
+            row.className = "services-package-builder__item";
+            row.dataset.packageSelectedKey = item.key;
+            const metaText = formatPackageItemMetaText(item);
+            row.innerHTML = `
+                <div class="services-package-builder__item-handle">
+                    <span></span>
+                    <span></span>
+                </div>
+                <div class="services-package-builder__item-body">
+                    <button type="button" class="services-package-builder__item-link" data-service-package-edit-item="${escapeMarkup(item.key)}">${escapeMarkup(item.name)}</button>
+                    <span>${escapeMarkup(metaText)}</span>
+                </div>
+                <div class="services-package-builder__item-price">
+                    ${showAdjustedPrice ? `<small>${escapeMarkup(formatRupiahDetailed(originalPrice))}</small>` : ""}
+                    <strong>${escapeMarkup(showAdjustedPrice ? formatRupiahDetailed(adjustedPrice) : formatRupiahDetailed(originalPrice))}</strong>
+                </div>
+                <button type="button" class="services-package-builder__item-remove" data-service-package-remove-item="${escapeMarkup(item.key)}" aria-label="Hapus ${escapeMarkup(item.name)}">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            `;
+            packageSelectedList.appendChild(row);
+        });
+        if (packageTotalDuration) {
+            packageTotalDuration.textContent = formatPackageDuration(readPackageTotalDuration());
+        }
+        syncPackageTotalsPriceDisplay();
+        syncPackageItemsInput();
+        syncPackagePriceField();
+    };
+    const syncPackagePickerSummary = () => {
+        if (!packageItemSummary || !(packageItemApplyButton instanceof HTMLButtonElement)) {
+            return;
+        }
+        const total = readPackageBaseTotal();
+        packageItemSummary.innerHTML = `${packageSelectedItems.length} items &bull; ${formatRupiah(total)}`;
+        if (packageItemFooterSummary) {
+            packageItemFooterSummary.innerHTML = `${packageSelectedItems.length} item &bull; ${formatRupiah(total)}`;
+        }
+        packageItemApplyButton.textContent = `Tambahkan ${packageSelectedItems.length} item`;
+        renderPackagePickerSelectedItems();
+    };
+    const syncPackageChoiceQtyUI = () => {
+        if (packageChoiceQtyValue) {
+            packageChoiceQtyValue.textContent = String(activePackageChoiceQty);
+        }
+        if (packageChoiceDecrease instanceof HTMLButtonElement) {
+            packageChoiceDecrease.disabled = activePackageChoiceQty <= 1;
+        }
+    };
+    const closePackageChoice = () => {
+        activePackageChoiceItem = null;
+        activePackageChoiceQty = 1;
+        if (packageChoiceWrap instanceof HTMLElement) {
+            packageChoiceWrap.hidden = true;
+        }
+    };
+    const syncPackageItemEditorUI = () => {
+        if (!activePackageEditingItem) {
+            return;
+        }
+        if (packageItemEditorTitle) {
+            packageItemEditorTitle.textContent = activePackageEditingItem.name;
+        }
+        if (packageItemEditorMeta) {
+            packageItemEditorMeta.textContent = formatPackageItemMetaText(activePackageEditingItem);
+        }
+        if (packageItemEditorPrice) {
+            packageItemEditorPrice.textContent = formatRupiahDetailed(readPackageItemAdjustedPrice(activePackageEditingItem));
+        }
+        if (packageItemEditorTypeLabel) {
+            packageItemEditorTypeLabel.textContent = getPackageExtraTimeLabel(activePackageEditingItem.extraTimeType || "none");
+        }
+        if (packageItemEditorTypeToggle instanceof HTMLButtonElement) {
+            packageItemEditorTypeToggle.setAttribute("aria-expanded", packageItemEditorTypeMenu instanceof HTMLElement && !packageItemEditorTypeMenu.hidden ? "true" : "false");
+        }
+        packageItemEditorTypeButtons.forEach((button) => {
+            button.classList.toggle("is-active", (button.dataset.servicePackageItemEditorType || "none") === (activePackageEditingItem.extraTimeType || "none"));
+        });
+        if (packageItemEditorQtyWrap instanceof HTMLElement) {
+            packageItemEditorQtyWrap.hidden = (activePackageEditingItem.type || "service") !== "product";
+        }
+        if (packageItemEditorQtyValue) {
+            packageItemEditorQtyValue.textContent = String(Math.max(1, toSafeNumber(activePackageEditingItem.qty) || 1));
+        }
+        if (packageItemEditorTimeWrap instanceof HTMLElement) {
+            packageItemEditorTimeWrap.hidden = (activePackageEditingItem.extraTimeType || "none") === "none";
+        }
+        if (packageItemEditorTimeValue) {
+            packageItemEditorTimeValue.textContent = formatPackageTimeEditorValue(activePackageEditingItem.extraTimeMinutes || 15);
+        }
+    };
+    const closePackageItemEditor = () => {
+        activePackageEditingItem = null;
+        if (packageItemEditorWrap instanceof HTMLElement) {
+            packageItemEditorWrap.hidden = true;
+        }
+        if (packageItemEditorTypeMenu instanceof HTMLElement) {
+            packageItemEditorTypeMenu.hidden = true;
+        }
+    };
+    const openPackageChoice = (item) => {
+        activePackageChoiceItem = { ...item };
+        const existingItem = packageSelectedItems.find((selectedItem) => selectedItem.key === item.key);
+        activePackageChoiceQty = item.type === "product" ? Number(existingItem?.qty || 1) : 1;
+        if (packageChoiceTitle) {
+            packageChoiceTitle.textContent = item.name;
+        }
+        if (packageChoiceTagline) {
+            const tagline = item.type === "product" ? String(item.brand || "").trim() : "";
+            packageChoiceTagline.textContent = tagline;
+            packageChoiceTagline.hidden = tagline === "";
+        }
+        if (packageChoiceSubtitle) {
+            packageChoiceSubtitle.textContent = "1 pilihan";
+        }
+        if (packageChoiceOptionTitle) {
+            packageChoiceOptionTitle.textContent = item.type === "product"
+                ? item.name.replace(/^[^(]+\(/, "").replace(/\)$/, "") || item.name
+                : `(${Math.floor(parsePackageItemDuration(item) / 60)}h)`;
+        }
+        if (packageChoiceOptionMeta) {
+            packageChoiceOptionMeta.textContent = item.type === "product"
+                ? `Stok: ${Number(item.stock || 0)}`
+                : formatRupiah(item.price);
+        }
+        if (packageChoiceQtyWrap instanceof HTMLElement) {
+            packageChoiceQtyWrap.hidden = item.type !== "product";
+        }
+        syncPackageChoiceQtyUI();
+        if (packageChoiceWrap instanceof HTMLElement) {
+            packageChoiceWrap.hidden = false;
+        }
+    };
+    const openPackageItemEditor = (itemKey) => {
+        const existingItem = packageSelectedItems.find((item) => item.key === itemKey);
+        if (!existingItem || !(packageItemEditorWrap instanceof HTMLElement)) {
+            return;
+        }
+        activePackageEditingItem = {
+            ...existingItem,
+            qty: Math.max(1, toSafeNumber(existingItem.qty) || 1),
+            extraTimeType: existingItem.extraTimeType || "none",
+            extraTimeMinutes: Math.max(15, Math.min(1000, toSafeNumber(existingItem.extraTimeMinutes) || 15)),
+        };
+        if (packageItemEditorTypeMenu instanceof HTMLElement) {
+            packageItemEditorTypeMenu.hidden = true;
+        }
+        packageItemEditorWrap.hidden = false;
+        syncPackageItemEditorUI();
+    };
+    const openPackageEditorForKey = (itemKey) => {
+        const activeItem = packageSelectedItems.find((item) => item.key === itemKey);
+        if (!activeItem) {
+            return;
+        }
+        if (packageItemModalEl?.classList.contains("show")) {
+            packageItemModal?.hide();
+            window.setTimeout(() => {
+                openPackageItemEditor(itemKey);
+            }, 180);
+            return;
+        }
+        openPackageItemEditor(itemKey);
+    };
+    const renderPackagePickerSelectedItems = () => {
+        if (!(packagePickerSelectedList instanceof HTMLElement) || !(packagePickerSelectedWrap instanceof HTMLElement)) {
+            return;
+        }
+        packagePickerSelectedList.innerHTML = "";
+        packagePickerSelectedWrap.hidden = packageSelectedItems.length === 0;
+        packagePickerSelectedWrap.classList.toggle("is-collapsed", packagePickerCollapsed);
+        packagePickerCollapsed = packageSelectedItems.length === 0 ? false : packagePickerCollapsed;
+        packageSelectedItems.forEach((item) => {
+            const row = document.createElement("div");
+            row.className = "services-package-picker-selected__row";
+            row.dataset.packageSelectedKey = item.key;
+            row.innerHTML = `
+                <button class="services-package-picker-selected__remove" type="button" data-service-package-remove-item="${escapeMarkup(item.key)}" aria-label="Hapus ${escapeMarkup(item.name)}">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+                <div class="services-package-picker-selected__qty">${Number(item.qty || 1)}</div>
+                <button class="services-package-picker-selected__name" type="button" data-service-package-edit-item="${escapeMarkup(item.key)}">${escapeMarkup(item.name)}</button>
+                <div class="services-package-picker-selected__price">${escapeMarkup(formatRupiah(Number(item.price || 0) * Number(item.qty || 1)))}</div>
+            `;
+            packagePickerSelectedList.appendChild(row);
+        });
+    };
+    const applyPackagePickerFilters = () => {
+        const keyword = normalizeText(packageItemSearchInput?.value);
+        let visibleCount = 0;
+        packageItemCatalogButtons.forEach((button) => {
+            button.classList.toggle("is-active", (button.dataset.servicePackageCatalog || "services") === activePackagePickerCatalog);
+        });
+        packageItemGroupButtons.forEach((button) => {
+            const groupValue = button.dataset.servicePackageGroupFilter || "all";
+            button.classList.toggle("is-active", groupValue === activePackagePickerGroupFilter);
+            button.hidden = activePackagePickerCatalog !== "services";
+        });
+        packageItemOptions.forEach((option) => {
+            const matchesCatalog = (option.dataset.itemCatalog || "services") === activePackagePickerCatalog;
+            const matchesGroup = activePackagePickerCatalog !== "services"
+                || activePackagePickerGroupFilter === "all"
+                || (option.dataset.itemGroupId || "") === activePackagePickerGroupFilter;
+            const haystack = normalizeText(option.dataset.itemSearch || option.dataset.itemName || "");
+            const visible = matchesCatalog && matchesGroup && (!keyword || haystack.includes(keyword));
+            option.hidden = !visible;
+            if (visible) {
+                visibleCount += 1;
+            }
+        });
+        if (packageItemEmpty instanceof HTMLElement) {
+            packageItemEmpty.hidden = visibleCount !== 0;
+        }
+        syncPackageItemOptionSelection();
+        syncPackagePickerSummary();
+        renderPackagePickerSelectedItems();
+    };
+    const setPackagePickerCatalog = (catalog) => {
+        activePackagePickerCatalog = catalog === "products" ? "products" : "services";
+        if (activePackagePickerCatalog !== "services") {
+            activePackagePickerGroupFilter = "all";
+        }
+        applyPackagePickerFilters();
+    };
+    const resetPackagePickerState = () => {
+        activePackagePickerCatalog = "services";
+        activePackagePickerGroupFilter = selectedPickerGroup?.id || "all";
+        packagePickerCollapsed = false;
+        if (packageItemSearchInput instanceof HTMLInputElement) {
+            packageItemSearchInput.value = "";
+        }
+        applyPackagePickerFilters();
+    };
+
+    const drawerMap = {
+        location: locationDrawer,
+        cost: costDrawer,
+        availability: availabilityDrawer,
+    };
+
+    const setSelectedPickerGroup = (option) => {
+        selectedPickerGroup = option
+            ? {
+                id: option.getAttribute("data-group-id") || "",
+                name: option.getAttribute("data-group-name") || "",
+            }
+            : null;
+
+        pickerOptions.forEach((pickerOption) => {
+            const isSelected = pickerOption === option;
+            pickerOption.classList.toggle("is-selected", isSelected);
+            pickerOption.setAttribute("aria-pressed", isSelected ? "true" : "false");
+        });
+
+        if (pickerNextButton) {
+            pickerNextButton.disabled = !selectedPickerGroup;
+        }
+    };
+
+    const updateGroupThumb = (card, imageUrl) => {
+        if (!(card instanceof HTMLElement)) {
+            return;
+        }
+        const thumb = card.querySelector("[data-service-group-image-trigger]");
+        if (!(thumb instanceof HTMLElement)) {
+            return;
+        }
+        const icon = thumb.querySelector("i");
+        card.dataset.groupImage = imageUrl || "";
+        thumb.style.backgroundImage = imageUrl ? `url("${imageUrl}")` : "";
+        thumb.classList.toggle("is-photo", Boolean(imageUrl));
+        if (icon instanceof HTMLElement) {
+            icon.hidden = Boolean(imageUrl);
+        }
+    };
+
+    const setActiveGroupColor = (colorValue) => {
+        activeGroupColor = colorValue || "#76b6e8";
+        serviceGroupColorButtons.forEach((button) => {
+            const isActive = (button.dataset.colorValue || "") === activeGroupColor;
+            button.classList.toggle("is-active", isActive);
+            button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        if (serviceGroupCustomColorInput) {
+            serviceGroupCustomColorInput.value = activeGroupColor;
+        }
+    };
+
+    const resetGroupModalState = () => {
+        editingGroupCard = null;
+        serviceGroupForm?.reset();
+        if (serviceGroupIdInput) {
+            serviceGroupIdInput.value = "";
+        }
+        if (serviceGroupModalTitle) {
+            serviceGroupModalTitle.textContent = "Tambah Grup Layanan";
+        }
+        if (serviceGroupDeleteButton instanceof HTMLButtonElement) {
+            serviceGroupDeleteButton.hidden = true;
+        }
+        setActiveGroupColor(serviceGroupCustomColorInput?.value || "#76b6e8");
+    };
+
+    const resetServiceModalState = () => {
+        editingServiceCard = null;
+        currentServiceImageDataUrl = "";
+        if (createModalTitle) {
+            createModalTitle.textContent = "Layanan Baru";
+        }
+        if (createDeleteButton instanceof HTMLButtonElement) {
+            createDeleteButton.hidden = true;
+        }
+        createNameInput && (createNameInput.value = "");
+        createDescriptionInput && (createDescriptionInput.value = "");
+        if (createTypeInput instanceof HTMLSelectElement) {
+            createTypeInput.selectedIndex = 0;
+        }
+        syncSegmentedAudience("Semua");
+        createLocationChecks.forEach((check) => {
+            check.checked = true;
+        });
+        if (createLocationAll instanceof HTMLInputElement) {
+            createLocationAll.checked = true;
+        }
+        createStaffChecks.forEach((check) => {
+            check.checked = true;
+        });
+        syncServiceStaffChecks();
+        if (settingsOnlineBookable instanceof HTMLInputElement) settingsOnlineBookable.checked = true;
+        if (settingsCommissionEnabled instanceof HTMLInputElement) settingsCommissionEnabled.checked = false;
+        if (settingsAtCustomerLocation instanceof HTMLInputElement) settingsAtCustomerLocation.checked = false;
+        if (settingsExtraTimeType instanceof HTMLSelectElement) settingsExtraTimeType.value = "none";
+        if (settingsDurationInput instanceof HTMLInputElement) settingsDurationInput.value = "";
+        syncSettingsDuration();
+        resetVariantSections();
+        applyCreateTab("details");
+    };
+
+    const openServiceEditor = (card) => {
+        if (!(card instanceof HTMLElement) || !createModal) {
+            return;
+        }
+        editingServiceCard = card;
+        if (createModalTitle) {
+            createModalTitle.textContent = "Edit Layanan";
+        }
+        if (createDeleteButton instanceof HTMLButtonElement) {
+            createDeleteButton.hidden = false;
+        }
+        if (createNameInput) {
+            createNameInput.value = card.dataset.serviceName || "";
+        }
+        if (createDescriptionInput) {
+            createDescriptionInput.value = card.dataset.serviceDescription || "";
+        }
+        currentServiceImageDataUrl = card.dataset.serviceImage || "";
+        syncSegmentedAudience((card.dataset.serviceAudience || "Women,Men").includes("Women") && (card.dataset.serviceAudience || "").includes("Men") ? "Semua" : ((card.dataset.serviceAudience || "").includes("Women") ? "Wanita" : "Pria"));
+        resetVariantSections();
+        const variants = parseJsonData(card.dataset.serviceVariants || "[]", []);
+        const sections = getVariantSections();
+        const normalizedVariants = Array.isArray(variants) && variants.length > 0
+            ? variants
+            : [{
+                variant_name: "",
+                duration_minutes: Number(card.dataset.serviceDuration || 0),
+                price: Number(card.dataset.servicePrice || 0),
+                special_price: 0,
+                location_pricing: null,
+                cost_price: 0,
+                cost_products: [],
+                availability: null,
+            }];
+        normalizedVariants.forEach((variant, index) => {
+            const section = index === 0 ? sections[0] : appendVariantSection();
+            if (!section) {
+                return;
+            }
+            const durationMinutes = Number(variant.duration_minutes || 0);
+            applySectionState(section, {
+                duration: durationMinutes > 0 ? `${durationMinutes} min` : "Select",
+                name: String(variant.variant_name || ""),
+                retailPrice: formatRupiah(variant.price || 0),
+                specialPrice: formatRupiah(variant.special_price || 0),
+                location: variant.location_pricing || createDefaultVariantState().location,
+                cost: {
+                    ...createDefaultVariantState().cost,
+                    costPrice: formatRupiah(variant.cost_price || 0),
+                    summary: `${formatRupiah(variant.cost_price || 0)} &bull; ${formatProductCount(Array.isArray(variant.cost_products) ? variant.cost_products.reduce((sum, item) => sum + Number(item.qty || 0), 0) : 0)}`,
+                    products: Array.isArray(variant.cost_products) ? variant.cost_products : [],
+                },
+                availability: variant.availability || createDefaultVariantState().availability,
+            });
+        });
+        const selectedStaffIds = new Set(String(card.dataset.serviceStaffIds || "").split(",").filter(Boolean));
+        createStaffChecks.forEach((check) => {
+            check.checked = selectedStaffIds.size === 0 || selectedStaffIds.has(check.value);
+        });
+        syncServiceStaffChecks();
+        if (settingsOnlineBookable instanceof HTMLInputElement) {
+            settingsOnlineBookable.checked = card.dataset.serviceOnlineBookable !== "0";
+        }
+        if (settingsCommissionEnabled instanceof HTMLInputElement) {
+            settingsCommissionEnabled.checked = card.dataset.serviceCommissionEnabled === "1";
+        }
+        if (settingsAtCustomerLocation instanceof HTMLInputElement) {
+            settingsAtCustomerLocation.checked = card.dataset.serviceAtCustomerLocation === "1";
+        }
+        if (settingsExtraTimeType instanceof HTMLSelectElement) {
+            settingsExtraTimeType.value = card.dataset.serviceExtraTimeType || "none";
+        }
+        if (settingsDurationInput instanceof HTMLInputElement) {
+            settingsDurationInput.value = card.dataset.serviceExtraTimeMinutes || "";
+        }
+        syncSettingsDuration();
+        applyCreateTab("details");
+        createModal.show();
+    };
+
+    const resetPackageModalState = () => {
+        editingPackageCard = null;
+        packageIdInput && (packageIdInput.value = "");
+        packageGroupInput && (packageGroupInput.value = "");
+        packageNameInput && (packageNameInput.value = "");
+        packageDescriptionInput && (packageDescriptionInput.value = "");
+        packageSelectedItems = [];
+        packagePricingMode = "service";
+        packageCustomPriceValue = 0;
+        packageAudience = "all";
+        if (packageDiscountValueInput instanceof HTMLInputElement) {
+            packageDiscountValueInput.value = "0";
+        }
+        packagePriceInput && (packagePriceInput.value = "0");
+        packageItemsInput && (packageItemsInput.value = "");
+        if (packageModalTitle) {
+            packageModalTitle.textContent = "Tambah Paket Layanan";
+        }
+        if (packageDeleteButton instanceof HTMLButtonElement) {
+            packageDeleteButton.hidden = true;
+        }
+        syncPackageAudienceUI();
+        renderPackageSelectedItems();
+        resetPackagePickerState();
+    };
+
+    const openPackageEditor = (card) => {
+        if (!(card instanceof HTMLElement) || !packageModal) {
+            return;
+        }
+        editingPackageCard = card;
+        if (packageModalTitle) {
+            packageModalTitle.textContent = "Edit Paket Layanan";
+        }
+        if (packageDeleteButton instanceof HTMLButtonElement) {
+            packageDeleteButton.hidden = false;
+        }
+        packageIdInput && (packageIdInput.value = card.dataset.packageId || "");
+        packageGroupInput && (packageGroupInput.value = parseGroupIds(card.dataset.groupIds || "")[0] || "");
+        packageNameInput && (packageNameInput.value = card.dataset.packageName || "");
+        packageDescriptionInput && (packageDescriptionInput.value = card.dataset.packageDescription || "");
+        if (card.dataset.packageItemsDetail) {
+            try {
+                packageSelectedItems = JSON.parse(decodeURIComponent(card.dataset.packageItemsDetail)).map((item) => ({
+                    ...item,
+                    qty: Number(item.qty || 1),
+                }));
+            } catch (error) {
+                packageSelectedItems = String(card.dataset.packageItems || "").split("||").filter(Boolean).map(findPackageItemByName);
+            }
+        } else {
+            packageSelectedItems = String(card.dataset.packageItems || "").split("||").filter(Boolean).map(findPackageItemByName);
+        }
+        const existingPrice = Number(card.dataset.packagePrice || 0);
+        const existingMode = card.dataset.packagePricingMode || "";
+        const inferredMode = existingMode || (packageSelectedItems.length && existingPrice !== readPackageBaseTotal() ? "custom" : "service");
+        packagePricingMode = inferredMode === "discount" || inferredMode === "custom" ? inferredMode : "service";
+        packageAudience = card.dataset.packageAudience || "all";
+        if (packageDiscountValueInput instanceof HTMLInputElement) {
+            packageDiscountValueInput.value = card.dataset.packageDiscountValue || "0";
+        }
+        if (packagePriceInput instanceof HTMLInputElement) {
+            if (packagePricingMode === "custom") {
+                packageCustomPriceValue = existingPrice;
+                packagePriceInput.value = formatRupiah(existingPrice);
+            } else if (packagePricingMode === "discount") {
+                packagePriceInput.value = card.dataset.packageDiscountValue || "";
+            } else {
+                packageCustomPriceValue = readPackageBaseTotal();
+                packagePriceInput.value = formatRupiah(readPackageBaseTotal());
+            }
+        }
+        syncPackageAudienceUI();
+        packageModal.show();
+        renderPackageSelectedItems();
+    };
+
+    const openPackageCreateFlow = () => {
+        if (!selectedPickerGroup || !groupPickerModal || !packageModal) {
+            return;
+        }
+        groupPickerModal.hide();
+        setTimeout(() => {
+            resetPackageModalState();
+            if (packageGroupInput) {
+                packageGroupInput.value = selectedPickerGroup?.id || "";
+            }
+            activePackagePickerGroupFilter = selectedPickerGroup?.id || "all";
+            packageModal.show();
+        }, 150);
+    };
+
+    const openGroupEditor = (card) => {
+        if (!(card instanceof HTMLElement) || !serviceGroupModal) {
+            return;
+        }
+        editingGroupCard = card;
+        if (serviceGroupIdInput) {
+            serviceGroupIdInput.value = card.dataset.groupId || "";
+        }
+        if (serviceGroupNameInput) {
+            serviceGroupNameInput.value = card.dataset.groupName || "";
+        }
+        if (serviceGroupDescriptionInput) {
+            serviceGroupDescriptionInput.value = card.dataset.groupDescription || "";
+        }
+        if (serviceGroupModalTitle) {
+            serviceGroupModalTitle.textContent = "Edit Group";
+        }
+        if (serviceGroupDeleteButton instanceof HTMLButtonElement) {
+            serviceGroupDeleteButton.hidden = false;
+        }
+        setActiveGroupColor(card.dataset.groupColor || "#76b6e8");
+        serviceGroupModal.show();
+    };
+
+    const openCreateFlowForGroup = (card) => {
+        if (!(card instanceof HTMLElement) || !createModal) {
+            return;
+        }
+        selectedPickerGroup = {
+            id: card.dataset.groupId || "",
+            name: card.dataset.groupName || "",
+        };
+        createModal.show();
+    };
+
+    const createGroupCard = ({ id, name, color, description }) => {
+        if (!(serviceGroupGrid instanceof HTMLElement)) {
+            return null;
+        }
+        const article = document.createElement("article");
+        article.className = "services-group-card";
+        article.dataset.serviceGroupCard = "";
+        article.dataset.groupId = id;
+        article.dataset.groupName = name;
+        article.dataset.groupDescription = description;
+        article.dataset.groupColor = color;
+        article.dataset.searchText = normalizeText(`${name} ${description}`);
+        article.style.setProperty("--service-group-accent", color);
+        article.innerHTML = `
+            <div class="services-group-card__header">
+                <div class="services-group-card__summary">
+                    <button class="services-group-card__thumb" type="button" data-service-group-image-trigger aria-label="Upload gambar ${name}">
+                        <i class="bi bi-image"></i>
+                    </button>
+                    <div>
+                        <h3>${name}</h3>
+                        <span>0 layanan</span>
+                    </div>
+                </div>
+                <div class="services-menu-wrap">
+                    <button class="services-dots services-dots--vertical" type="button" data-services-menu-toggle>
+                        <i class="bi bi-three-dots-vertical"></i>
+                    </button>
+                    <div class="services-dropdown" data-services-menu>
+                        <button type="button" data-service-group-action="add-service" data-group-id="${id}">Tambah layanan</button>
+                        <button type="button" data-service-group-action="edit" data-group-id="${id}">Edit group</button>
+                    </div>
+                </div>
+            </div>
+            <div class="services-group-card__body" data-service-group-body></div>
+        `;
+        serviceGroupGrid.prepend(article);
+        return article;
+    };
+
+    const createPackageCard = ({ id, name, price, items, itemsDetail = [], groupIds = [], groupName = "", description = "", pricingMode = "service", discountValue = 0, audience = "all" }) => {
+        const packageGrid = shell.querySelector(".services-package-grid");
+        if (!(packageGrid instanceof HTMLElement)) {
+            return null;
+        }
+        const article = document.createElement("article");
+        article.className = "services-package-card";
+        article.dataset.packageCard = "";
+        article.dataset.packageId = id;
+        article.dataset.groupIds = groupIds.join(",");
+        article.dataset.packageName = name;
+        article.dataset.packagePrice = String(price || 0);
+        article.dataset.packageItems = (items || []).join("||");
+        article.dataset.packageItemsDetail = encodeURIComponent(JSON.stringify(itemsDetail || []));
+        article.dataset.packageDescription = description;
+        article.dataset.packagePricingMode = pricingMode;
+        article.dataset.packageDiscountValue = String(discountValue || 0);
+        article.dataset.packageAudience = audience;
+        article.dataset.searchText = normalizeText(`${name} ${(items || []).join(" ")} ${groupName || ""}`);
+        article.innerHTML = `
+            <div class="services-package-card__head">
+                <button class="services-card-thumb" type="button" data-card-image-trigger aria-label="Upload gambar ${escapeMarkup(name)}">
+                    <i class="bi bi-image"></i>
+                </button>
+                <div>
+                    <h3>${escapeMarkup(name)}</h3>
+                <span>${(items || []).length} item paket</span>
+                </div>
+                <div class="services-menu-wrap">
+                    <button class="services-dots services-dots--horizontal" type="button" data-services-menu-toggle>
+                        <i class="bi bi-three-dots"></i>
+                    </button>
+                    <div class="services-dropdown" data-services-menu>
+                        <button type="button" data-package-card-action="edit">Edit paket layanan</button>
+                    </div>
+                </div>
+            </div>
+            <div class="services-package-card__items">${(items || []).map((item) => `<span>${escapeMarkup(item)}</span>`).join("")}</div>
+            <div class="services-package-card__price">${formatRupiah(price || 0)}</div>
+        `;
+        packageGrid.prepend(article);
+        return article;
+    };
+
+    const applyGroupFilters = () => {
+        const keyword = normalizeText(groupSearchInput?.value);
+        getGroupCards().forEach((card) => {
+            const haystack = normalizeText(card.dataset.searchText || `${card.dataset.groupName || ""} ${card.dataset.groupDescription || ""}`);
+            setCardVisibility(card, !keyword || haystack.includes(keyword));
+        });
+    };
+
+    const applyServiceFilters = () => {
+        const keyword = normalizeText(servicesSearchInput?.value);
+        getServiceCards().forEach((card) => {
+            const matchesGroup = activeServicesGroupFilter === "all" || (card.dataset.groupId || "") === activeServicesGroupFilter;
+            const haystack = normalizeText(card.dataset.searchText || "");
+            setCardVisibility(card, matchesGroup && (!keyword || haystack.includes(keyword)));
+        });
+    };
+
+    const applyPackageFilters = () => {
+        const keyword = normalizeText(packagesSearchInput?.value);
+        getPackageCards().forEach((card) => {
+            const groupIds = parseGroupIds(card.dataset.groupIds || "");
+            const matchesGroup = activePackagesGroupFilter === "all" || groupIds.includes(activePackagesGroupFilter);
+            const haystack = normalizeText(card.dataset.searchText || "");
+            setCardVisibility(card, matchesGroup && (!keyword || haystack.includes(keyword)));
+        });
+    };
+
+    const downloadCsv = (filename, rows) => {
+        const csv = rows
+            .map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, "\"\"")}"`).join(","))
+            .join("\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+    };
+
+    const exportVisibleCards = (type) => {
+        if (type === "services") {
+            const rows = [["Group", "Layanan", "Durasi", "Harga"]];
+            getServiceCards().filter((card) => !card.hidden).forEach((card) => {
+                rows.push([
+                    card.dataset.groupName || "",
+                    card.querySelector(".service-card__header h3")?.textContent?.trim() || "",
+                    card.querySelector(".service-card__meta span")?.textContent?.replace(/\s+/g, " ").trim() || "",
+                    card.querySelector(".service-card__footer strong")?.textContent?.trim() || "",
+                ]);
+            });
+            downloadCsv("layanan.csv", rows);
+            return;
+        }
+
+        if (type === "packages") {
+            const rows = [["Paket", "Items", "Harga"]];
+            getPackageCards().filter((card) => !card.hidden).forEach((card) => {
+                rows.push([
+                    card.querySelector(".services-package-card__head h3")?.textContent?.trim() || "",
+                    Array.from(card.querySelectorAll(".services-package-card__items span")).map((item) => item.textContent?.trim() || "").join(" | "),
+                    card.querySelector(".services-package-card__price")?.textContent?.trim() || "",
+                ]);
+            });
+            downloadCsv("paket-layanan.csv", rows);
+        }
+    };
+
+    const openServiceCreateFlow = () => {
+        if (!selectedPickerGroup || !groupPickerModal || currentPickerFlow !== "services" || !createModal) {
+            return;
+        }
+
+        groupPickerModal.hide();
+        setTimeout(() => {
+            resetServiceModalState();
+            createModal.show();
+        }, 150);
+    };
+
+    const applyCreateTab = (tabName) => {
+        createTabs.forEach((tab) => {
+            tab.classList.toggle("is-active", tab.dataset.serviceCreateTab === tabName);
+        });
+
+        createPanels.forEach((panel) => {
+            panel.classList.toggle("is-active", panel.dataset.serviceCreatePanel === tabName);
+        });
+    };
+
+    const openDrawer = (drawerName) => {
+        const drawer = drawerMap[drawerName];
+        if (!drawerLayer || !drawer) {
+            return;
+        }
+
+        activeDrawerName = drawerName;
+        drawerLayer.classList.add("is-open");
+        Object.values(drawerMap).forEach((item) => item?.classList.remove("is-open"));
+        drawer.classList.add("is-open");
+        drawer.setAttribute("aria-hidden", "false");
+    };
+
+    const closeDrawer = () => {
+        if (!drawerLayer) {
+            return;
+        }
+
+        drawerLayer.classList.remove("is-open");
+        Object.values(drawerMap).forEach((drawer) => {
+            drawer?.classList.remove("is-open");
+            drawer?.setAttribute("aria-hidden", "true");
+        });
+        activeDrawerName = null;
+        if (productDropdown) {
+            productDropdown.hidden = true;
+        }
+    };
+
+    const updateLocationPricingState = () => {
+        const useSharedPricing = Boolean(locationSharedToggle?.checked);
+        const activeFields = getVariantFields(activeVariantSection);
+        const activeLocationSummary = getVariantFields(activeVariantSection)?.locationSummary || locationSummary;
+        const activeRetailInput = activeFields?.retail || retailInput;
+        const activeSpecialInput = activeFields?.special || specialInput;
+        if (activeRetailInput) activeRetailInput.disabled = !useSharedPricing;
+        if (activeSpecialInput) activeSpecialInput.disabled = !useSharedPricing;
+        if (locationRetailInput) locationRetailInput.disabled = useSharedPricing;
+        if (locationSpecialInput) locationSpecialInput.disabled = useSharedPricing;
+        if (activeLocationSummary) {
+            activeLocationSummary.textContent = useSharedPricing
+                ? "Semua lokasi memiliki harga yang sama"
+                : "Harga berdasarkan lokasi";
+        }
+    };
+
+    const updateCostState = () => {
+        const activeCostSummary = getVariantFields(activeVariantSection)?.costSummary || costSummary;
+        const totalCost = Array.from(selectedProducts.values()).reduce((sum, product) => {
+            return sum + (product.price * product.qty);
+        }, 0);
+        const totalProducts = Array.from(selectedProducts.values()).reduce((sum, product) => sum + product.qty, 0);
+
+        if (costPriceInput) {
+            costPriceInput.value = formatRupiah(totalCost);
+        }
+
+        if (activeCostSummary) {
+            activeCostSummary.innerHTML = `${formatRupiah(totalCost)} &bull; ${formatProductCount(totalProducts)}`;
+        }
+    };
+
+    const renderSelectedProducts = () => {
+        if (!selectedProductsContainer) {
+            return;
+        }
+
+        selectedProductsContainer.innerHTML = "";
+
+        Array.from(selectedProducts.values()).forEach((product) => {
+            const row = document.createElement("div");
+            row.className = "services-create-product-row";
+            row.dataset.productId = product.id;
+            row.innerHTML = `
+                <div class="services-create-product-row__info">
+                    <div class="services-create-product-row__icon"><i class="bi bi-bottle"></i></div>
+                    <div class="services-create-product-row__name">${product.name}</div>
+                </div>
+                <div class="services-create-product-row__qty">
+                    <div class="services-create-product-row__qty-value">${product.qty}</div>
+                    <button type="button" data-product-qty-change="-1">-</button>
+                    <button type="button" data-product-qty-change="1">+</button>
+                </div>
+            `;
+            selectedProductsContainer.appendChild(row);
+        });
+    };
+
+    const syncCostUI = () => {
+        renderSelectedProducts();
+        updateCostState();
+    };
+
+    const filterProductOptions = () => {
+        if (!productDropdown) {
+            return;
+        }
+
+        const keyword = String(productSearchInput?.value || "").trim().toLowerCase();
+        let visibleCount = 0;
+        productOptions.forEach((option) => {
+            const name = String(option.dataset.productName || "").toLowerCase();
+            const isVisible = !keyword || name.includes(keyword);
+            option.hidden = !isVisible;
+            if (isVisible) {
+                visibleCount += 1;
+            }
+        });
+
+        productDropdown.hidden = visibleCount === 0;
+    };
+
+    const addProduct = (option) => {
+        const productId = option.dataset.productId || "";
+        if (!productId) {
+            return;
+        }
+
+        const price = Number(option.dataset.productPrice || 0);
+        const current = selectedProducts.get(productId);
+        if (current) {
+            current.qty += 1;
+        } else {
+            selectedProducts.set(productId, {
+                id: productId,
+                name: option.dataset.productName || "",
+                price,
+                qty: 1,
+            });
+        }
+
+        if (productSearchInput) {
+            productSearchInput.value = "";
+        }
+        if (productDropdown) {
+            productDropdown.hidden = true;
+        }
+
+        syncCostUI();
+    };
+
+    const updateAvailabilitySummary = () => {
+        const activeAvailabilitySummary = getVariantFields(activeVariantSection)?.availabilitySummary || availabilitySummary;
+        if (!activeAvailabilitySummary) {
+            return;
+        }
+
+        if (!availabilityState.enabled) {
+            activeAvailabilitySummary.textContent = "Nonaktif";
+            return;
+        }
+
+        if (availabilityState.mode === "weekly") {
+            const labels = Array.from(availabilityState.weekdays)
+                .sort((left, right) => Number(left) - Number(right))
+                .map((value) => weekdayLabels[Number(value)] || "");
+            activeAvailabilitySummary.textContent = labels.length ? labels.join(", ") : "Ulang tiap pekan";
+            return;
+        }
+
+        const labels = Array.from(availabilityState.dates)
+            .sort()
+            .map((value) => formatDateLabel(value));
+        activeAvailabilitySummary.textContent = labels.length ? labels.join(", ") : "Tanggal spesifik";
+    };
+
+    const renderSelectedDates = () => {
+        if (!selectedDatesContainer) {
+            return;
+        }
+
+        selectedDatesContainer.innerHTML = "";
+        Array.from(availabilityState.dates).sort().forEach((dateValue) => {
+            const chip = document.createElement("div");
+            chip.className = "services-create-date-chip";
+            chip.innerHTML = `
+                <span>${formatDateLabel(dateValue)}</span>
+                <button type="button" data-remove-date="${dateValue}">&times;</button>
+            `;
+            selectedDatesContainer.appendChild(chip);
+        });
+    };
+
+    const syncAvailabilityUI = () => {
+        if (availabilityEnabledToggle) {
+            availabilityEnabledToggle.checked = availabilityState.enabled;
+        }
+        if (availabilityPanel) {
+            availabilityPanel.hidden = !availabilityState.enabled;
+        }
+
+        availabilityModeButtons.forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.serviceAvailabilityMode === availabilityState.mode);
+        });
+
+        availabilityContents.forEach((content) => {
+            content.classList.toggle("is-active", content.dataset.serviceAvailabilityContent === availabilityState.mode);
+        });
+
+        dateButtons.forEach((button) => {
+            const value = button.dataset.dateValue || "";
+            button.classList.toggle("is-selected", availabilityState.dates.has(value));
+        });
+
+        weekdayOptions.forEach((checkbox) => {
+            checkbox.checked = availabilityState.weekdays.has(checkbox.value);
+        });
+
+        renderSelectedDates();
+        updateAvailabilitySummary();
+    };
+
+    const formatPriceInputValue = (input) => {
+        if (!input) {
+            return;
+        }
+        input.value = formatRupiah(parseRupiah(input.value));
+    };
+
+    const handleCurrencyFocus = (input) => {
+        if (!input) {
+            return;
+        }
+        if (parseRupiah(input.value) === 0) {
+            input.value = "";
+        }
+    };
+
+    const handleCurrencyInput = (input) => {
+        if (!input) {
+            return;
+        }
+        const digits = String(input.value || "").replace(/[^\d]/g, "");
+        input.value = digits ? formatRupiah(digits) : "";
+    };
+
+    const handleCurrencyBlur = (input) => {
+        if (!input) {
+            return;
+        }
+        input.value = parseRupiah(input.value) > 0 ? formatRupiah(input.value) : "Rp 0";
+    };
+
+    const cloneProducts = () => {
+        return Array.from(selectedProducts.values()).map((product) => ({
+            id: product.id,
+            name: product.name,
+            price: product.price,
+            qty: product.qty,
+        }));
+    };
+
+    const getVariantSections = () => Array.from(variantList?.querySelectorAll("[data-service-variant-section]") || []);
+
+    const getVariantFields = (section) => {
+        if (!(section instanceof HTMLElement)) {
+            return null;
+        }
+        return {
+            duration: section.querySelector("[data-service-variant-duration]"),
+            name: section.querySelector("[data-service-variant-name]"),
+            retail: section.querySelector("[data-service-variant-retail]"),
+            special: section.querySelector("[data-service-variant-special]"),
+            locationSummary: section.querySelector("[data-service-location-pricing-summary]"),
+            costSummary: section.querySelector("[data-service-cost-summary]"),
+            availabilitySummary: section.querySelector("[data-service-availability-summary]"),
+        };
+    };
+
+    const readSectionState = (section) => {
+        const fields = getVariantFields(section);
+        const stored = variantSectionStates.get(section) || createDefaultVariantState();
+        return {
+            duration: String(fields?.duration?.value || "Select"),
+            name: String(fields?.name?.value || "").trim(),
+            retailPrice: String(fields?.retail?.value || "Rp 0"),
+            specialPrice: String(fields?.special?.value || "Rp 0"),
+            location: {
+                ...stored.location,
+                summary: String(fields?.locationSummary?.textContent || stored.location.summary).trim(),
+            },
+            cost: {
+                ...stored.cost,
+                summary: String(fields?.costSummary?.textContent || stored.cost.summary).trim(),
+            },
+            availability: {
+                ...stored.availability,
+                summary: String(fields?.availabilitySummary?.textContent || stored.availability.summary).trim(),
+            },
+        };
+    };
+
+    const applySectionState = (section, state) => {
+        const fields = getVariantFields(section);
+        if (!fields) {
+            return;
+        }
+        if (fields.duration) fields.duration.value = state.duration || "Select";
+        if (fields.name) fields.name.value = state.name || "";
+        if (fields.retail) fields.retail.value = state.retailPrice || "Rp 0";
+        if (fields.special) fields.special.value = state.specialPrice || "Rp 0";
+        if (fields.locationSummary) fields.locationSummary.textContent = state.location?.summary || "Semua lokasi memiliki harga yang sama";
+        if (fields.costSummary) fields.costSummary.innerHTML = state.cost?.summary || "Rp 0 • 0 Produk";
+        if (fields.availabilitySummary) fields.availabilitySummary.textContent = state.availability?.summary || "Nonaktif";
+        variantSectionStates.set(section, {
+            duration: state.duration || "Select",
+            name: state.name || "",
+            retailPrice: state.retailPrice || "Rp 0",
+            specialPrice: state.specialPrice || "Rp 0",
+            location: {
+                useSharedPricing: state.location?.useSharedPricing ?? true,
+                retailPrice: state.location?.retailPrice || "Rp 0",
+                specialPrice: state.location?.specialPrice || "Rp 0",
+                summary: state.location?.summary || "Semua lokasi memiliki harga yang sama",
+            },
+            cost: {
+                summary: state.cost?.summary || "Rp 0 • 0 Produk",
+                costPrice: state.cost?.costPrice || "Rp 0",
+                products: (state.cost?.products || []).map((product) => ({ ...product })),
+            },
+            availability: {
+                summary: state.availability?.summary || "Nonaktif",
+                enabled: Boolean(state.availability?.enabled),
+                mode: state.availability?.mode || "specific",
+                dates: [...(state.availability?.dates || [])],
+                weekdays: [...(state.availability?.weekdays || [])],
+            },
+        });
+    };
+
+    const loadSectionIntoDrawers = (section) => {
+        const state = variantSectionStates.get(section) || createDefaultVariantState();
+        if (locationSharedToggle) locationSharedToggle.checked = Boolean(state.location.useSharedPricing);
+        if (locationRetailInput) locationRetailInput.value = state.location.retailPrice || "Rp 0";
+        if (locationSpecialInput) locationSpecialInput.value = state.location.specialPrice || "Rp 0";
+        updateLocationPricingState();
+
+        selectedProducts.clear();
+        (state.cost.products || []).forEach((product) => {
+            selectedProducts.set(product.id, { ...product });
+        });
+        if (costPriceInput) costPriceInput.value = state.cost.costPrice || "Rp 0";
+        syncCostUI();
+
+        availabilityState.enabled = Boolean(state.availability.enabled);
+        availabilityState.mode = state.availability.mode || "specific";
+        availabilityState.dates = new Set(state.availability.dates || []);
+        availabilityState.weekdays = new Set(state.availability.weekdays || []);
+        syncAvailabilityUI();
+    };
+
+    const saveSectionState = (section, partialState = {}) => {
+        if (!(section instanceof HTMLElement)) {
+            return;
+        }
+        const nextState = {
+            ...readSectionState(section),
+            ...partialState,
+        };
+        if (partialState.location) {
+            nextState.location = {
+                ...readSectionState(section).location,
+                ...partialState.location,
+            };
+        }
+        if (partialState.cost) {
+            nextState.cost = {
+                ...readSectionState(section).cost,
+                ...partialState.cost,
+            };
+        }
+        if (partialState.availability) {
+            nextState.availability = {
+                ...readSectionState(section).availability,
+                ...partialState.availability,
+            };
+        }
+        applySectionState(section, nextState);
+    };
+
+    const syncVariantSections = () => {
+        const sections = getVariantSections();
+        sections.forEach((section, index) => {
+            const head = section.querySelector("[data-service-variant-section-head]");
+            const addButton = section.querySelector("[data-service-create-add-variant]");
+            if (head) {
+                head.hidden = index === 0;
+            }
+            if (addButton instanceof HTMLButtonElement) {
+                addButton.hidden = index !== sections.length - 1;
+            }
+        });
+        if (!activeVariantSection && sections.length > 0) {
+            activeVariantSection = sections[sections.length - 1];
+        }
+    };
+
+    const appendVariantSection = () => {
+        if (!variantList || !(variantTemplate instanceof HTMLTemplateElement)) {
+            return null;
+        }
+        const fragment = variantTemplate.content.firstElementChild?.cloneNode(true);
+        if (!(fragment instanceof HTMLElement)) {
+            return null;
+        }
+        variantList.appendChild(fragment);
+        applySectionState(fragment, createDefaultVariantState());
+        syncVariantSections();
+        return fragment;
+    };
+
+    const resetVariantSections = () => {
+        const sections = getVariantSections();
+        sections.slice(1).forEach((section) => section.remove());
+        if (sections[0]) {
+            applySectionState(sections[0], createDefaultVariantState());
+            activeVariantSection = sections[0];
+        } else {
+            activeVariantSection = null;
+        }
+        syncVariantSections();
     };
 
     const applyTab = (tabName) => {
@@ -11905,6 +18846,7 @@ function initServicesPage() {
 
         panels.forEach((panel) => {
             panel.classList.toggle("is-active", panel.dataset.servicesPanel === tabName);
+            panel.hidden = panel.dataset.servicesPanel !== tabName;
         });
 
         if (!fab) {
@@ -11914,10 +18856,12 @@ function initServicesPage() {
         const config = fabConfig[tabName] || fabConfig.groups;
         fab.setAttribute("data-bs-target", config.target);
         fab.setAttribute("aria-label", config.label);
+        currentPickerFlow = config.target === "#serviceGroupPickerModal" ? tabName : "groups";
 
         if (pickerTitle && config.target === "#serviceGroupPickerModal") {
             pickerTitle.textContent = config.title;
         }
+
     };
 
     tabs.forEach((tab) => {
@@ -11925,6 +18869,25 @@ function initServicesPage() {
             closeMenus();
             applyTab(tab.dataset.servicesTab);
         });
+    });
+
+    shell.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const toggle = target.closest("[data-services-menu-toggle]");
+        if (!(toggle instanceof HTMLElement)) {
+            return;
+        }
+        event.stopPropagation();
+        const wrap = toggle.closest(".services-menu-wrap");
+        const menu = wrap?.querySelector("[data-services-menu]");
+        const isOpen = menu?.classList.contains("is-open");
+        closeMenus();
+        if (menu && !isOpen) {
+            menu.classList.add("is-open");
+        }
     });
 
     menuToggles.forEach((toggle) => {
@@ -11948,7 +18911,928 @@ function initServicesPage() {
         closeMenus();
     });
 
+    shell.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        const imageTrigger = target.closest("[data-service-group-image-trigger]");
+        if (imageTrigger instanceof HTMLElement) {
+            return;
+        }
+
+        const cardImageTrigger = target.closest("[data-card-image-trigger]");
+        if (cardImageTrigger instanceof HTMLElement && cardImageInput instanceof HTMLInputElement) {
+            activeCardImageTrigger = cardImageTrigger;
+            cardImageInput.click();
+            return;
+        }
+
+        const shopOption = target.closest("[data-services-shop-option]");
+        if (shopOption instanceof HTMLButtonElement) {
+            const targetKey = shopOption.dataset.servicesShopOption || "";
+            const shopName = shopOption.dataset.shopName || "Star Salon";
+            const label = shell.querySelector(`[data-services-shop-label="${targetKey}"]`);
+            if (label) {
+                label.textContent = shopName;
+            }
+            closeMenus();
+            return;
+        }
+
+        const groupFilterOption = target.closest("[data-services-group-filter]");
+        if (groupFilterOption instanceof HTMLButtonElement) {
+            const panelKey = groupFilterOption.dataset.servicesGroupFilter || "";
+            const groupId = groupFilterOption.dataset.groupFilterId || "all";
+            const label = groupFilterOption.textContent?.trim() || "Semua Grup";
+            if (panelKey === "services") {
+                activeServicesGroupFilter = groupId;
+                if (servicesGroupLabel) {
+                    servicesGroupLabel.textContent = label;
+                }
+                applyServiceFilters();
+            } else if (panelKey === "packages") {
+                activePackagesGroupFilter = groupId;
+                if (packagesGroupLabel) {
+                    packagesGroupLabel.textContent = label;
+                }
+                applyPackageFilters();
+            }
+            closeMenus();
+            return;
+        }
+
+        const exportOption = target.closest("[data-services-export]");
+        if (exportOption instanceof HTMLButtonElement) {
+            exportVisibleCards(exportOption.dataset.servicesExport || "");
+            closeMenus();
+            return;
+        }
+
+        const groupActionButton = target.closest("[data-service-group-action]");
+        if (groupActionButton instanceof HTMLButtonElement) {
+            const action = groupActionButton.dataset.serviceGroupAction || "";
+            const card = groupActionButton.closest("[data-service-group-card]");
+            closeMenus();
+            if (!(card instanceof HTMLElement)) {
+                return;
+            }
+
+            if (action === "add-service") {
+                openCreateFlowForGroup(card);
+                return;
+            }
+
+            if (action === "edit") {
+                openGroupEditor(card);
+            }
+            return;
+        }
+
+        const serviceActionButton = target.closest("[data-service-card-action]");
+        if (serviceActionButton instanceof HTMLButtonElement) {
+            const card = serviceActionButton.closest("[data-service-card]");
+            closeMenus();
+            if (card instanceof HTMLElement) {
+                openServiceEditor(card);
+            }
+            return;
+        }
+
+        const packageActionButton = target.closest("[data-package-card-action]");
+        if (packageActionButton instanceof HTMLButtonElement) {
+            const card = packageActionButton.closest("[data-package-card]");
+            closeMenus();
+            if (card instanceof HTMLElement) {
+                openPackageEditor(card);
+            }
+            return;
+        }
+    });
+
+    pickerOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            setSelectedPickerGroup(option);
+            if (currentPickerFlow === "services") {
+                openServiceCreateFlow();
+                return;
+            }
+            if (currentPickerFlow === "packages") {
+                openPackageCreateFlow();
+            }
+        });
+    });
+
+    groupPickerModalEl?.addEventListener("hidden.bs.modal", () => {
+        setSelectedPickerGroup(null);
+    });
+
+    serviceGroupModalEl?.addEventListener("hidden.bs.modal", () => {
+        resetGroupModalState();
+    });
+
+    createModalEl?.addEventListener("hidden.bs.modal", () => {
+        closeDrawer();
+        resetServiceModalState();
+    });
+
+    packageModalEl?.addEventListener("hidden.bs.modal", () => {
+        resetPackageModalState();
+    });
+
+    packageItemModalEl?.addEventListener("hidden.bs.modal", () => {
+        resetPackagePickerState();
+        closePackageChoice();
+    });
+
+    createTabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+            applyCreateTab(tab.dataset.serviceCreateTab || "details");
+        });
+    });
+
+    createMediaUploadButton?.addEventListener("click", () => {
+        activeCardImageTrigger = null;
+        cardImageInput?.click();
+    });
+
+    serviceGroupColorButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            setActiveGroupColor(button.dataset.colorValue || "#76b6e8");
+        });
+    });
+
+    serviceGroupCustomColorTrigger?.addEventListener("click", () => {
+        if (serviceGroupCustomColorInput instanceof HTMLInputElement) {
+            serviceGroupCustomColorInput.click();
+        }
+    });
+
+    serviceGroupCustomColorInput?.addEventListener("input", () => {
+        setActiveGroupColor(serviceGroupCustomColorInput.value);
+    });
+
+    serviceGroupDeleteButton?.addEventListener("click", async () => {
+        if (!(editingGroupCard instanceof HTMLElement) || !serviceGroupModal) {
+            return;
+        }
+        if (!window.confirm("Apakah anda yakin mau menghapus ini ?")) {
+            return;
+        }
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            formData.append("id", editingGroupCard.dataset.groupId || "");
+            await servicesApiRequest("/api/services/groups/delete", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Hapus grup layanan gagal.");
+        }
+    });
+
+    serviceGroupSaveButton?.addEventListener("click", async () => {
+        if (!serviceGroupModal) {
+            return;
+        }
+        const nextName = String(serviceGroupNameInput?.value || "").trim();
+        const nextDescription = String(serviceGroupDescriptionInput?.value || "").trim();
+        if (!nextName) {
+            serviceGroupNameInput?.focus();
+            return;
+        }
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            if (editingGroupCard instanceof HTMLElement) {
+                formData.append("id", editingGroupCard.dataset.groupId || "");
+                formData.append("image_data_url", editingGroupCard.dataset.groupImage || "");
+            }
+            formData.append("name", nextName);
+            formData.append("description", nextDescription);
+            formData.append("color", activeGroupColor || "#76b6e8");
+            await servicesApiRequest("/api/services/groups/save", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Simpan grup layanan gagal.");
+        }
+    });
+
+    createDeleteButton?.addEventListener("click", async () => {
+        if (!(editingServiceCard instanceof HTMLElement) || !createModal) {
+            return;
+        }
+        if (!window.confirm("Apakah anda yakin mau menghapus ini ?")) {
+            return;
+        }
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            formData.append("id", editingServiceCard.dataset.serviceId || "");
+            await servicesApiRequest("/api/services/delete", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Hapus layanan gagal.");
+        }
+    });
+
+    createSaveButton?.addEventListener("click", async () => {
+        if (!createModal) {
+            return;
+        }
+        const groupId = editingServiceCard?.dataset.groupId || selectedPickerGroup?.id || "";
+        const serviceName = String(createNameInput?.value || "").trim();
+        const serviceDescription = String(createDescriptionInput?.value || "").trim();
+        if (!groupId) {
+            alert("Grup layanan belum dipilih.");
+            return;
+        }
+        if (!serviceName) {
+            createNameInput?.focus();
+            return;
+        }
+        const audienceLabel = getActiveAudienceLabel();
+        const audiences = audienceLabel === "Pria" ? ["Men"] : audienceLabel === "Wanita" ? ["Women"] : ["Women", "Men"];
+        const variantsPayload = readServiceVariantPayload();
+        const staffIds = createStaffChecks.filter((check) => check.checked).map((check) => check.value);
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            if (editingServiceCard instanceof HTMLElement) {
+                formData.append("id", editingServiceCard.dataset.serviceId || "");
+            }
+            formData.append("group_id", groupId);
+            formData.append("name", serviceName);
+            formData.append("description", serviceDescription);
+            formData.append("audience_json", JSON.stringify(audiences));
+            formData.append("status", editingServiceCard?.dataset.serviceStatus || "Aktif");
+            formData.append("image_data_url", currentServiceImageDataUrl);
+            formData.append("online_bookable", settingsOnlineBookable?.checked ? "1" : "0");
+            formData.append("commission_enabled", settingsCommissionEnabled?.checked ? "1" : "0");
+            formData.append("at_customer_location", settingsAtCustomerLocation?.checked ? "1" : "0");
+            formData.append("extra_time_type", settingsExtraTimeType?.value || "none");
+            formData.append("extra_time_minutes", String(parseInt(settingsDurationInput?.value || "0", 10) || 0));
+            formData.append("variants_json", JSON.stringify(variantsPayload));
+            formData.append("staff_ids_json", JSON.stringify(staffIds));
+            await servicesApiRequest("/api/services/save", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Simpan layanan gagal.");
+        }
+    });
+
+    packagePricingModeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            packagePricingMode = button.dataset.servicePackagePricingMode || "service";
+            if (packagePricingMode === "custom" && packageCustomPriceValue <= 0) {
+                packageCustomPriceValue = readPackageBaseTotal();
+            }
+            syncPackagePriceField();
+        });
+    });
+
+    packageAudienceButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            packageAudience = button.dataset.servicePackageAudienceOption || "all";
+            syncPackageAudienceUI();
+        });
+    });
+
+    packagePriceInput?.addEventListener("focus", () => {
+        if (packagePricingMode === "custom") {
+            handleCurrencyFocus(packagePriceInput);
+        }
+    });
+    packagePriceInput?.addEventListener("input", () => {
+        if (packagePricingMode === "custom") {
+            handleCurrencyInput(packagePriceInput);
+            packageCustomPriceValue = parseRupiah(packagePriceInput.value || 0);
+            renderPackageSelectedItems();
+            syncPackageSelectionSummary();
+            return;
+        }
+        if (packagePricingMode === "discount") {
+            packagePriceInput.value = String(packagePriceInput.value || "").replace(/[^\d.,]/g, "");
+            if (packageDiscountValueInput instanceof HTMLInputElement) {
+                packageDiscountValueInput.value = packagePriceInput.value.replace(",", ".");
+            }
+            syncPackagePriceField();
+        }
+    });
+    packagePriceInput?.addEventListener("blur", () => {
+        if (packagePricingMode === "custom") {
+            handleCurrencyBlur(packagePriceInput);
+            const parsedValue = parseRupiah(packagePriceInput.value || 0);
+            packageCustomPriceValue = parsedValue > 0 ? parsedValue : packageCustomPriceValue;
+            packagePriceInput.value = formatRupiah(packageCustomPriceValue);
+            renderPackageSelectedItems();
+            syncPackageSelectionSummary();
+            return;
+        }
+        if (packagePricingMode === "discount") {
+            syncPackagePriceField();
+        }
+    });
+
+    packageOpenPickerButton?.addEventListener("click", () => {
+        if (!packageItemModal) {
+            return;
+        }
+        resetPackagePickerState();
+        syncPackageItemOptionSelection();
+        syncPackagePickerSummary();
+        packageItemModal.show();
+    });
+
+    packageSelectedList?.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const removeButton = target.closest("[data-service-package-remove-item]");
+        if (removeButton instanceof HTMLButtonElement) {
+            const itemKey = removeButton.dataset.servicePackageRemoveItem || "";
+            packageSelectedItems = packageSelectedItems.filter((item) => item.key !== itemKey);
+            renderPackageSelectedItems();
+            syncPackageItemOptionSelection();
+            syncPackagePickerSummary();
+            return;
+        }
+        const editButton = target.closest("[data-service-package-edit-item]");
+        if (editButton instanceof HTMLButtonElement) {
+            openPackageEditorForKey(editButton.dataset.servicePackageEditItem || "");
+        }
+    });
+
+    packagePickerSelectedList?.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const removeButton = target.closest("[data-service-package-remove-item]");
+        if (removeButton instanceof HTMLButtonElement) {
+            const itemKey = removeButton.dataset.servicePackageRemoveItem || "";
+            packageSelectedItems = packageSelectedItems.filter((item) => item.key !== itemKey);
+            renderPackagePickerSelectedItems();
+            renderPackageSelectedItems();
+            syncPackageItemOptionSelection();
+            syncPackagePickerSummary();
+            return;
+        }
+        const editButton = target.closest("[data-service-package-edit-item]");
+        if (editButton instanceof HTMLButtonElement) {
+            openPackageEditorForKey(editButton.dataset.servicePackageEditItem || "");
+        }
+    });
+
+    packagePickerCollapseButton?.addEventListener("click", () => {
+        packagePickerCollapsed = !packagePickerCollapsed;
+        renderPackagePickerSelectedItems();
+    });
+
+    packageItemCatalogButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            setPackagePickerCatalog(button.dataset.servicePackageCatalog || "services");
+        });
+    });
+
+    packageItemGroupButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            activePackagePickerGroupFilter = button.dataset.servicePackageGroupFilter || "all";
+            applyPackagePickerFilters();
+        });
+    });
+
+    packageItemSearchInput?.addEventListener("input", () => {
+        applyPackagePickerFilters();
+    });
+
+    packageItemOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            openPackageChoice(createPackageItemFromOption(option));
+        });
+    });
+
+    packageChoiceCloseButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            closePackageChoice();
+        });
+    });
+
+    packageChoiceDecrease?.addEventListener("click", () => {
+        activePackageChoiceQty = Math.max(1, activePackageChoiceQty - 1);
+        syncPackageChoiceQtyUI();
+    });
+
+    packageChoiceIncrease?.addEventListener("click", () => {
+        activePackageChoiceQty += 1;
+        syncPackageChoiceQtyUI();
+    });
+
+    packageChoiceApplyButton?.addEventListener("click", () => {
+        if (!activePackageChoiceItem) {
+            return;
+        }
+        const existingIndex = packageSelectedItems.findIndex((item) => item.key === activePackageChoiceItem.key);
+        const nextItem = {
+            ...activePackageChoiceItem,
+            qty: activePackageChoiceItem.type === "product" ? activePackageChoiceQty : 1,
+        };
+        if (existingIndex >= 0) {
+            packageSelectedItems.splice(existingIndex, 1, nextItem);
+        } else {
+            packageSelectedItems.push(nextItem);
+        }
+        closePackageChoice();
+        renderPackagePickerSelectedItems();
+        renderPackageSelectedItems();
+        syncPackageItemOptionSelection();
+        syncPackagePickerSummary();
+    });
+
+    packageItemEditorCloseButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            closePackageItemEditor();
+        });
+    });
+
+    packageItemEditorTypeToggle?.addEventListener("click", () => {
+        if (!(packageItemEditorTypeMenu instanceof HTMLElement)) {
+            return;
+        }
+        packageItemEditorTypeMenu.hidden = !packageItemEditorTypeMenu.hidden;
+        syncPackageItemEditorUI();
+    });
+
+    packageItemEditorTypeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            if (!activePackageEditingItem) {
+                return;
+            }
+            activePackageEditingItem.extraTimeType = button.dataset.servicePackageItemEditorType || "none";
+            if (activePackageEditingItem.extraTimeType === "none") {
+                activePackageEditingItem.extraTimeMinutes = 0;
+            } else if (toSafeNumber(activePackageEditingItem.extraTimeMinutes) < 15) {
+                activePackageEditingItem.extraTimeMinutes = 15;
+            }
+            if (packageItemEditorTypeMenu instanceof HTMLElement) {
+                packageItemEditorTypeMenu.hidden = true;
+            }
+            syncPackageItemEditorUI();
+        });
+    });
+
+    packageItemEditorQtyButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            if (!activePackageEditingItem || (activePackageEditingItem.type || "service") !== "product") {
+                return;
+            }
+            const delta = Number(button.dataset.servicePackageItemEditorQtyChange || 0);
+            activePackageEditingItem.qty = Math.max(1, (toSafeNumber(activePackageEditingItem.qty) || 1) + delta);
+            syncPackageItemEditorUI();
+        });
+    });
+
+    packageItemEditorTimeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            if (!activePackageEditingItem || (activePackageEditingItem.extraTimeType || "none") === "none") {
+                return;
+            }
+            const delta = Number(button.dataset.servicePackageItemEditorTimeChange || 0);
+            const currentMinutes = Math.max(15, Math.min(1000, toSafeNumber(activePackageEditingItem.extraTimeMinutes) || 15));
+            activePackageEditingItem.extraTimeMinutes = Math.max(15, Math.min(1000, currentMinutes + delta));
+            syncPackageItemEditorUI();
+        });
+    });
+
+    packageItemEditorApplyButton?.addEventListener("click", () => {
+        if (!activePackageEditingItem) {
+            return;
+        }
+        const currentIndex = packageSelectedItems.findIndex((item) => item.key === activePackageEditingItem.key);
+        if (currentIndex >= 0) {
+            packageSelectedItems.splice(currentIndex, 1, {
+                ...packageSelectedItems[currentIndex],
+                ...activePackageEditingItem,
+                qty: (activePackageEditingItem.type || "service") === "product" ? Math.max(1, toSafeNumber(activePackageEditingItem.qty) || 1) : 1,
+                extraTimeType: activePackageEditingItem.extraTimeType || "none",
+                extraTimeMinutes: (activePackageEditingItem.extraTimeType || "none") === "none"
+                    ? 0
+                    : Math.max(15, Math.min(1000, toSafeNumber(activePackageEditingItem.extraTimeMinutes) || 15)),
+            });
+        }
+        closePackageItemEditor();
+        renderPackagePickerSelectedItems();
+        renderPackageSelectedItems();
+        syncPackageItemOptionSelection();
+        syncPackagePickerSummary();
+    });
+
+    packageItemApplyButton?.addEventListener("click", () => {
+        packageItemModal?.hide();
+        renderPackageSelectedItems();
+    });
+
+    packageDeleteButton?.addEventListener("click", async () => {
+        if (!(editingPackageCard instanceof HTMLElement) || !packageModal) {
+            return;
+        }
+        if (!window.confirm("Apakah anda yakin mau menghapus ini ?")) {
+            return;
+        }
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            formData.append("id", editingPackageCard.dataset.packageId || "");
+            await servicesApiRequest("/api/services/packages/delete", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Hapus paket layanan gagal.");
+        }
+    });
+
+    packageSaveButton?.addEventListener("click", async () => {
+        const packageName = String(packageNameInput?.value || "").trim();
+        const packageDescription = String(packageDescriptionInput?.value || "").trim();
+        const packageItemsDetail = packageSelectedItems.map((item) => ({ ...item, qty: Number(item.qty || 1) }));
+        const packagePrice = readPackageFinalPrice();
+        const fallbackGroupId = String(packageGroupInput?.value || "");
+        const packageDiscountValue = packagePricingMode === "discount" ? readPackageDiscountPercent() : 0;
+
+        if (!packageName) {
+            packageNameInput?.focus();
+            return;
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            if (editingPackageCard instanceof HTMLElement) {
+                formData.append("id", editingPackageCard.dataset.packageId || "");
+            }
+            formData.append("group_id", fallbackGroupId);
+            formData.append("name", packageName);
+            formData.append("description", packageDescription);
+            formData.append("package_price", String(packagePrice));
+            formData.append("pricing_mode", packagePricingMode);
+            formData.append("discount_value", String(packageDiscountValue));
+            formData.append("audience", packageAudience);
+            formData.append("items_json", JSON.stringify(packageItemsDetail));
+            await servicesApiRequest("/api/services/packages/save", {
+                method: "POST",
+                body: formData,
+            });
+            window.location.reload();
+        } catch (error) {
+            alert(error.message || "Simpan paket layanan gagal.");
+        }
+    });
+
+    cardImageInput?.addEventListener("change", () => {
+        const file = cardImageInput.files?.[0];
+        if (!file) {
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+            if (typeof reader.result === "string") {
+                if (activeCardImageTrigger instanceof HTMLElement) {
+                    setCardImage(activeCardImageTrigger, reader.result);
+                } else {
+                    currentServiceImageDataUrl = reader.result;
+                }
+            }
+        };
+        reader.readAsDataURL(file);
+        cardImageInput.value = "";
+    });
+
+    groupSearchInput?.addEventListener("input", () => {
+        applyGroupFilters();
+    });
+    servicesSearchInput?.addEventListener("input", () => {
+        applyServiceFilters();
+    });
+    packagesSearchInput?.addEventListener("input", () => {
+        applyPackageFilters();
+    });
+
+    settingsExtraTimeType?.addEventListener("change", () => {
+        syncSettingsDuration();
+    });
+
+    settingsDurationInput?.addEventListener("input", () => {
+        settingsDurationInput.value = String(settingsDurationInput.value || "").replace(/[^\d]/g, "");
+    });
+
+    variantList?.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        const section = target.closest("[data-service-variant-section]");
+        if (!(section instanceof HTMLElement)) {
+            return;
+        }
+
+        activeVariantSection = section;
+
+        const addButton = target.closest("[data-service-create-add-variant]");
+        if (addButton instanceof HTMLElement) {
+            const nextSection = appendVariantSection();
+            nextSection?.querySelector("[data-service-variant-duration]")?.focus();
+            return;
+        }
+
+        const removeButton = target.closest("[data-service-variant-remove]");
+        if (removeButton instanceof HTMLElement) {
+            const sections = getVariantSections();
+            if (sections.length > 1) {
+                section.remove();
+                const nextSections = getVariantSections();
+                activeVariantSection = nextSections[nextSections.length - 1] || null;
+                syncVariantSections();
+            }
+            return;
+        }
+
+        if (target.closest("[data-service-location-pricing-trigger]")) {
+            loadSectionIntoDrawers(section);
+            openDrawer("location");
+            return;
+        }
+
+        if (target.closest("[data-service-cost-trigger]")) {
+            loadSectionIntoDrawers(section);
+            openDrawer("cost");
+            return;
+        }
+
+        if (target.closest("[data-service-availability-trigger]")) {
+            loadSectionIntoDrawers(section);
+            openDrawer("availability");
+        }
+    });
+
+    variantList?.addEventListener("focusin", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) {
+            return;
+        }
+        if (!target.matches("[data-service-variant-retail], [data-service-variant-special]")) {
+            return;
+        }
+        handleCurrencyFocus(target);
+    });
+
+    variantList?.addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) {
+            return;
+        }
+        if (!target.matches("[data-service-variant-retail], [data-service-variant-special]")) {
+            return;
+        }
+        handleCurrencyInput(target);
+    });
+
+    variantList?.addEventListener("focusout", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) {
+            return;
+        }
+        if (!target.matches("[data-service-variant-retail], [data-service-variant-special]")) {
+            return;
+        }
+        handleCurrencyBlur(target);
+    });
+
+    segmentedButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            segmentedButtons.forEach((item) => item.classList.remove("is-active"));
+            button.classList.add("is-active");
+        });
+    });
+
+    createStaffAll?.addEventListener("change", () => {
+        createStaffChecks.forEach((check) => {
+            check.checked = createStaffAll.checked;
+        });
+    });
+    createStaffChecks.forEach((check) => {
+        check.addEventListener("change", syncServiceStaffChecks);
+    });
+    createLocationAll?.addEventListener("change", () => {
+        createLocationChecks.forEach((check) => {
+            check.checked = createLocationAll.checked;
+        });
+    });
+    createLocationChecks.forEach((check) => {
+        check.addEventListener("change", () => {
+            if (createLocationAll instanceof HTMLInputElement) {
+                createLocationAll.checked = createLocationChecks.length > 0 && createLocationChecks.every((item) => item.checked);
+            }
+        });
+    });
+
+    [locationRetailInput, locationSpecialInput, costPriceInput].forEach((input) => {
+        input?.addEventListener("focus", () => {
+            handleCurrencyFocus(input);
+        });
+        input?.addEventListener("input", () => {
+            handleCurrencyInput(input);
+        });
+        input?.addEventListener("blur", () => {
+            handleCurrencyBlur(input);
+        });
+    });
+
+    drawerCloseButtons.forEach((button) => {
+        button.addEventListener("click", () => closeDrawer());
+    });
+    drawerBackdrop?.addEventListener("click", () => closeDrawer());
+
+    locationSharedToggle?.addEventListener("change", () => {
+        updateLocationPricingState();
+    });
+    locationApplyButton?.addEventListener("click", () => {
+        updateLocationPricingState();
+        saveSectionState(activeVariantSection, {
+            location: {
+                useSharedPricing: Boolean(locationSharedToggle?.checked),
+                retailPrice: String(locationRetailInput?.value || "Rp 0"),
+                specialPrice: String(locationSpecialInput?.value || "Rp 0"),
+                summary: locationSharedToggle?.checked ? "Semua lokasi memiliki harga yang sama" : "Harga berdasarkan lokasi",
+            },
+        });
+        closeDrawer();
+    });
+
+    productSearchInput?.addEventListener("focus", () => {
+        filterProductOptions();
+    });
+    productSearchInput?.addEventListener("input", () => {
+        filterProductOptions();
+    });
+    productSearchInput?.addEventListener("click", () => {
+        filterProductOptions();
+    });
+    productSearchWrap?.addEventListener("click", () => {
+        filterProductOptions();
+    });
+
+    productOptions.forEach((option) => {
+        option.addEventListener("click", () => addProduct(option));
+    });
+
+    createModalEl?.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Node) || !productDropdown) {
+            return;
+        }
+        if (productSearchWrap?.contains(target) || productDropdown.contains(target)) {
+            return;
+        }
+        productDropdown.hidden = true;
+    });
+
+    selectedProductsContainer?.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+
+        const qtyButton = target.closest("[data-product-qty-change]");
+        const row = target.closest(".services-create-product-row");
+        if (!(qtyButton instanceof HTMLElement) || !(row instanceof HTMLElement)) {
+            return;
+        }
+
+        const productId = row.dataset.productId || "";
+        const product = selectedProducts.get(productId);
+        if (!product) {
+            return;
+        }
+
+        const delta = Number(qtyButton.getAttribute("data-product-qty-change") || 0);
+        const nextQty = product.qty + delta;
+        if (nextQty <= 0) {
+            selectedProducts.delete(productId);
+        } else {
+            product.qty = nextQty;
+        }
+        syncCostUI();
+    });
+
+    costApplyButton?.addEventListener("click", () => {
+        syncCostUI();
+        saveSectionState(activeVariantSection, {
+            cost: {
+                summary: `${formatRupiah(parseRupiah(costPriceInput?.value || 0))} &bull; ${formatProductCount(Array.from(selectedProducts.values()).reduce((sum, product) => sum + product.qty, 0))}`,
+                costPrice: String(costPriceInput?.value || "Rp 0"),
+                products: cloneProducts(),
+            },
+        });
+        closeDrawer();
+    });
+
+    availabilityEnabledToggle?.addEventListener("change", () => {
+        availabilityState.enabled = Boolean(availabilityEnabledToggle.checked);
+        syncAvailabilityUI();
+    });
+
+    availabilityModeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            availabilityState.mode = button.dataset.serviceAvailabilityMode || "specific";
+            syncAvailabilityUI();
+        });
+    });
+
+    dateButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            const value = button.dataset.dateValue || "";
+            if (!value) {
+                return;
+            }
+
+            if (availabilityState.dates.has(value)) {
+                availabilityState.dates.delete(value);
+            } else {
+                availabilityState.dates.add(value);
+            }
+            syncAvailabilityUI();
+        });
+    });
+
+    selectedDatesContainer?.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const removeButton = target.closest("[data-remove-date]");
+        if (!(removeButton instanceof HTMLElement)) {
+            return;
+        }
+        const value = removeButton.getAttribute("data-remove-date") || "";
+        availabilityState.dates.delete(value);
+        syncAvailabilityUI();
+    });
+
+    weekdayOptions.forEach((checkbox) => {
+        checkbox.addEventListener("change", () => {
+            if (checkbox.checked) {
+                availabilityState.weekdays.add(checkbox.value);
+            } else {
+                availabilityState.weekdays.delete(checkbox.value);
+            }
+            syncAvailabilityUI();
+        });
+    });
+
+    availabilityApplyButton?.addEventListener("click", () => {
+        updateAvailabilitySummary();
+        saveSectionState(activeVariantSection, {
+            availability: {
+                summary: String((getVariantFields(activeVariantSection)?.availabilitySummary || availabilitySummary)?.textContent || "Nonaktif").trim(),
+                enabled: availabilityState.enabled,
+                mode: availabilityState.mode,
+                dates: Array.from(availabilityState.dates).sort(),
+                weekdays: Array.from(availabilityState.weekdays).sort((left, right) => Number(left) - Number(right)),
+            },
+        });
+        closeDrawer();
+    });
+
+    updateLocationPricingState();
+    syncCostUI();
+    syncAvailabilityUI();
+    syncSettingsDuration();
+    syncPackageAudienceUI();
+    renderPackageSelectedItems();
+    applyPackagePickerFilters();
+    applyCreateTab("details");
+    applySectionState(firstVariantSection, createDefaultVariantState());
+    syncVariantSections();
     applyTab("groups");
+    applyGroupFilters();
+    applyServiceFilters();
+    applyPackageFilters();
 }
 
 function initVouchersPage() {
@@ -11963,8 +19847,11 @@ function initVouchersPage() {
     const voucherSearch = shell.querySelector(".js-vouchers-search");
     const discountSearch = shell.querySelector(".js-vouchers-discount-search");
     const voucherTypeFilters = Array.from(shell.querySelectorAll(".js-voucher-type-filter"));
+    const shopLabels = Array.from(shell.querySelectorAll(".js-vouchers-shop-label"));
+    const shopOptions = Array.from(shell.querySelectorAll(".js-vouchers-shop-option"));
     const voucherTableBody = shell.querySelector(".js-voucher-table-body");
-    const voucherTotalLabel = shell.querySelector(".inventory-table__footer > span");
+    const voucherPaginationFooter = shell.querySelector('[data-vouchers-pagination="voucher"]');
+    const voucherTotalLabel = voucherPaginationFooter?.querySelector(".js-vouchers-total");
     const discountList = shell.querySelector(".js-voucher-discount-list");
     const voucherFabMenu = shell.querySelector(".js-voucher-fab-menu");
     const voucherFabClose = shell.querySelector(".js-voucher-fab-close");
@@ -11996,6 +19883,7 @@ function initVouchersPage() {
     const voucherServicePreviewLocation = voucherServiceModalEl?.querySelector(".js-voucher-service-preview-location");
     const voucherServicePreviewDuration = voucherServiceModalEl?.querySelector(".js-voucher-service-preview-duration");
     const voucherServiceSave = voucherServiceModalEl?.querySelector(".js-voucher-service-save");
+    const voucherServiceDelete = voucherServiceModalEl?.querySelector(".js-voucher-service-delete");
     const voucherServicePanel = voucherServiceModalEl?.querySelector(".js-voucher-service-panel");
     const voucherServicePanelClose = voucherServiceModalEl?.querySelector(".js-voucher-service-panel-close");
     const voucherServicePanelCancel = voucherServiceModalEl?.querySelector("[data-service-panel-cancel]");
@@ -12022,6 +19910,7 @@ function initVouchersPage() {
     const voucherGiftMessage = voucherGiftModalEl?.querySelector(".js-voucher-gift-message");
     const voucherGiftPreviewTitle = voucherGiftModalEl?.querySelector(".js-voucher-gift-preview-title");
     const voucherGiftSave = voucherGiftModalEl?.querySelector(".js-voucher-gift-save");
+    const voucherGiftDelete = voucherGiftModalEl?.querySelector(".js-voucher-gift-delete");
     const voucherGiftLocationPanel = voucherGiftModalEl?.querySelector(".js-voucher-gift-location-panel");
     const voucherGiftLocationPanelClose = voucherGiftModalEl?.querySelector(".js-voucher-gift-location-panel-close");
     const voucherGiftLocationPanelApply = voucherGiftModalEl?.querySelector(".js-voucher-gift-location-panel-apply");
@@ -12040,6 +19929,7 @@ function initVouchersPage() {
     const discountScopeInputs = Array.from(discountModalEl?.querySelectorAll(".js-voucher-discount-scope") || []);
     let activeTab = "voucher";
     let activeVoucherType = "all";
+    let activeShop = shopLabels[0]?.textContent?.trim() || "Star Salon";
     let activeDiscountMode = "amount";
     let editingDiscountRow = null;
     let editingVoucherRow = null;
@@ -12146,6 +20036,12 @@ function initVouchersPage() {
     };
     const getVoucherRows = () => Array.from(shell.querySelectorAll(".js-voucher-row"));
     const getDiscountRows = () => Array.from(shell.querySelectorAll(".js-voucher-discount-item"));
+    const voucherPagination = createBottomPagination({
+        container: voucherPaginationFooter,
+        getItems: getVoucherRows,
+        totalNode: voucherTotalLabel,
+        scrollTarget: shell.querySelector(".vouchers-table-card"),
+    });
     const getCheckedScopes = () => discountScopeInputs
         .filter((input) => input.checked)
         .map((input) => input.value);
@@ -12542,11 +20438,12 @@ function initVouchersPage() {
     const adjustServiceDraftQty = (name, delta) => {
         const option = voucherServicePanelOptions.find((item) => item.dataset.serviceName === name);
         if (!option) return;
+        const id = option.dataset.serviceId || "";
         const price = option.dataset.servicePrice || "Rp 0,00";
         const duration = option.dataset.serviceDuration || "";
         const current = servicePickerDraft.find((item) => item.name === name);
         if (!current && delta > 0) {
-            servicePickerDraft.push({ name, price, duration, quantity: 1 });
+            servicePickerDraft.push({ id, name, price, duration, quantity: 1 });
         } else if (current) {
             current.quantity = Math.max(0, Number(current.quantity || 0) + delta);
             if (current.quantity === 0) {
@@ -12563,9 +20460,11 @@ function initVouchersPage() {
         if (!optionName || servicePickerDraft.find((item) => item.name === optionName)) {
             return false;
         }
+        const optionId = optionCard.dataset.serviceId || "";
         const price = optionCard.dataset.servicePrice || "Rp 0,00";
         const duration = optionCard.dataset.serviceDuration || "";
         servicePickerDraft.push({
+            id: optionId,
             name: optionName,
             price,
             duration,
@@ -12658,16 +20557,18 @@ function initVouchersPage() {
     };
     const updateVoucherTotal = () => {
         if (voucherTotalLabel) {
-            voucherTotalLabel.textContent = `Total ${getVoucherRows().length}`;
+            voucherTotalLabel.textContent = String(getVoucherRows().filter((row) => row.dataset.paginationMatch !== "0").length);
         }
     };
     const syncVoucherRowData = (row, payload) => {
+        row.dataset.voucherId = String(payload.id || row.dataset.voucherId || "");
         row.dataset.voucherType = payload.typeKey;
         row.dataset.voucherTypeCode = payload.typeCode;
         row.dataset.voucherTypeLabel = payload.typeLabel;
         row.dataset.voucherName = payload.name;
         row.dataset.voucherValue = payload.value;
         row.dataset.voucherEditorValue = payload.editorValue;
+        row.dataset.voucherPriceValue = payload.priceValue || payload.editorValue;
         row.dataset.voucherDuration = payload.duration;
         row.dataset.voucherExpiryLabel = payload.expiryLabel;
         row.dataset.voucherExpiryValue = payload.expiryValue || payload.expiryLabel;
@@ -12748,7 +20649,20 @@ function initVouchersPage() {
         getVoucherRows().forEach((row) => {
             const matchesType = activeVoucherType === "all" || row.dataset.voucherType === activeVoucherType;
             const matchesQuery = !query || normalize(row.dataset.search).includes(query);
-            row.hidden = !(matchesType && matchesQuery);
+            row.dataset.paginationMatch = matchesType && matchesQuery ? "1" : "0";
+        });
+        voucherPagination.refresh();
+    };
+
+    const syncShopLabels = () => {
+        shopLabels.forEach((label) => {
+            label.textContent = activeShop;
+        });
+    };
+
+    const syncShopOptions = () => {
+        shopOptions.forEach((option) => {
+            option.classList.toggle("is-active", (option.dataset.vouchersShopOption || "") === activeShop);
         });
     };
 
@@ -12790,6 +20704,9 @@ function initVouchersPage() {
             panel.classList.toggle("is-active", isActive);
             panel.hidden = !isActive;
         });
+        if (activeTab === "voucher") {
+            voucherPagination.refresh();
+        }
         if (activeTab !== "voucher") {
             toggleVoucherFabMenu(false);
         }
@@ -12818,7 +20735,7 @@ function initVouchersPage() {
                 : formatCurrencyTyping(row.dataset.discountAmount || "");
         }
         if (discountMax) {
-            discountMax.value = formatCurrencyTyping(row.dataset.discountMax || "");
+            discountMax.value = formatCurrencyTyping(row.dataset.discountMaxValue || row.dataset.discountMax || "");
         }
         let scopes = [];
         try {
@@ -12842,13 +20759,14 @@ function initVouchersPage() {
         row.dataset.discountMode = payload.mode;
         row.dataset.discountAmount = String(payload.amount);
         row.dataset.discountMax = payload.maxLabel;
+        row.dataset.discountMaxValue = String(payload.maxValue || 0);
         row.dataset.discountScopes = JSON.stringify(payload.scopes);
         row.dataset.search = buildDiscountSearch(payload.name, payload.amountLabel);
         row.innerHTML = `<strong>${payload.name}</strong><span>${payload.amountLabel}</span>`;
         return row;
     };
 
-    const saveDiscount = () => {
+    const saveDiscount = async () => {
         const name = String(discountName?.value || "").trim();
         if (!name) {
             discountName?.focus();
@@ -12857,32 +20775,51 @@ function initVouchersPage() {
         const amount = parseNumber(discountAmount?.value || 0);
         const maxValue = parseNumber(discountMax?.value || 0);
         const scopes = getCheckedScopes();
-        const amountLabel = activeDiscountMode === "percent"
-            ? formatPercent(amount)
-            : formatCurrency(amount);
-        const payload = {
-            id: editingDiscountRow?.dataset.discountId || String(Date.now()),
-            name,
-            mode: activeDiscountMode,
-            amount,
-            amountLabel,
-            maxLabel: activeDiscountMode === "percent" ? formatCurrency(maxValue) : "",
-            scopes,
-        };
-        const targetRow = editingDiscountRow || buildDiscountRow(payload);
-        targetRow.dataset.discountId = payload.id;
-        targetRow.dataset.discountName = payload.name;
-        targetRow.dataset.discountMode = payload.mode;
-        targetRow.dataset.discountAmount = String(payload.amount);
-        targetRow.dataset.discountMax = payload.maxLabel;
-        targetRow.dataset.discountScopes = JSON.stringify(payload.scopes);
-        targetRow.dataset.search = buildDiscountSearch(payload.name, payload.amountLabel);
-        targetRow.innerHTML = `<strong>${payload.name}</strong><span>${payload.amountLabel}</span>`;
-        if (!editingDiscountRow) {
-            discountList?.prepend(targetRow);
+        const formData = new FormData();
+        formData.append("_csrf", staffApiCsrfToken());
+        if (editingDiscountRow?.dataset.discountId) {
+            formData.append("id", editingDiscountRow.dataset.discountId);
         }
-        discountModal?.hide();
-        applyDiscountSearch();
+        formData.append("name", name);
+        formData.append("mode", activeDiscountMode);
+        formData.append("amount_value", String(amount));
+        formData.append("max_discount_value", String(maxValue));
+        formData.append("scopes_json", JSON.stringify(scopes));
+
+        try {
+            const response = await staffApiRequest("/api/vouchers/discounts/save", {
+                method: "POST",
+                body: formData,
+            });
+            const discount = response.discount || {};
+            const payload = {
+                id: discount.id || editingDiscountRow?.dataset.discountId || String(Date.now()),
+                name: discount.name || name,
+                mode: discount.mode || activeDiscountMode,
+                amount: discount.amount_value || String(amount),
+                amountLabel: discount.amount_label || (activeDiscountMode === "percent" ? formatPercent(amount) : formatCurrency(amount)),
+                maxLabel: discount.max_discount || formatCurrency(maxValue),
+                maxValue: discount.max_discount_value || String(maxValue),
+                scopes: discount.applies_to || scopes,
+            };
+            const targetRow = editingDiscountRow || buildDiscountRow(payload);
+            targetRow.dataset.discountId = String(payload.id);
+            targetRow.dataset.discountName = payload.name;
+            targetRow.dataset.discountMode = payload.mode;
+            targetRow.dataset.discountAmount = String(payload.amount);
+            targetRow.dataset.discountMax = payload.maxLabel;
+            targetRow.dataset.discountMaxValue = String(payload.maxValue || 0);
+            targetRow.dataset.discountScopes = JSON.stringify(payload.scopes);
+            targetRow.dataset.search = buildDiscountSearch(payload.name, payload.amountLabel);
+            targetRow.innerHTML = `<strong>${payload.name}</strong><span>${payload.amountLabel}</span>`;
+            if (!editingDiscountRow) {
+                discountList?.prepend(targetRow);
+            }
+            discountModal?.hide();
+            applyDiscountSearch();
+        } catch (error) {
+            window.alert(error.message || "Diskon gagal disimpan.");
+        }
     };
 
     const openDiscountCreate = () => {
@@ -12956,6 +20893,7 @@ function initVouchersPage() {
         if (voucherServiceModalEl?.querySelector(".customer-modal__header h2")) {
             voucherServiceModalEl.querySelector(".customer-modal__header h2").textContent = "Voucher Layanan Baru";
         }
+        if (voucherServiceDelete instanceof HTMLElement) voucherServiceDelete.hidden = true;
         if (voucherServiceName) voucherServiceName.value = "";
         if (voucherServiceQuantity instanceof HTMLButtonElement) {
             voucherServiceQuantity.setAttribute("aria-pressed", "false");
@@ -12988,6 +20926,7 @@ function initVouchersPage() {
         if (voucherGiftModalEl?.querySelector(".customer-modal__header h2")) {
             voucherGiftModalEl.querySelector(".customer-modal__header h2").textContent = "Voucher Hadiah Baru";
         }
+        if (voucherGiftDelete instanceof HTMLElement) voucherGiftDelete.hidden = true;
         if (voucherGiftName) voucherGiftName.value = "";
         if (voucherGiftValue) voucherGiftValue.value = formatCurrencyInput(0);
         if (voucherGiftPrice) voucherGiftPrice.value = formatCurrencyInput(0);
@@ -13009,6 +20948,7 @@ function initVouchersPage() {
         if (voucherServiceModalEl?.querySelector(".customer-modal__header h2")) {
             voucherServiceModalEl.querySelector(".customer-modal__header h2").textContent = "Edit Voucher Layanan";
         }
+        if (voucherServiceDelete instanceof HTMLElement) voucherServiceDelete.hidden = false;
         if (voucherServiceName) voucherServiceName.value = row.dataset.voucherName || "";
         try {
             servicePickerCommitted = JSON.parse(row.dataset.voucherServices || "[]");
@@ -13016,7 +20956,7 @@ function initVouchersPage() {
             servicePickerCommitted = [];
         }
         if (voucherServicePrice) {
-            voucherServicePrice.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherEditorValue || "0"));
+            voucherServicePrice.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherPriceValue || row.dataset.voucherEditorValue || "0"));
         }
         setButtonLabel(voucherServiceExpiry, row.dataset.voucherExpiryLabel || "After 1 Month");
         setButtonLabel(voucherServiceLocation, row.dataset.voucherLocation || "Semua Lokasi");
@@ -13061,9 +21001,10 @@ function initVouchersPage() {
         if (voucherGiftModalEl?.querySelector(".customer-modal__header h2")) {
             voucherGiftModalEl.querySelector(".customer-modal__header h2").textContent = "Edit Voucher Hadiah";
         }
+        if (voucherGiftDelete instanceof HTMLElement) voucherGiftDelete.hidden = false;
         if (voucherGiftName) voucherGiftName.value = row.dataset.voucherName || "";
         if (voucherGiftValue) voucherGiftValue.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherEditorValue || "0"));
-        if (voucherGiftPrice) voucherGiftPrice.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherEditorValue || "0"));
+        if (voucherGiftPrice) voucherGiftPrice.value = formatCurrencyInput(sanitizeDigitsOnly(row.dataset.voucherPriceValue || row.dataset.voucherEditorValue || "0"));
         setButtonLabel(voucherGiftExpiry, row.dataset.voucherExpiryLabel || "After 1 Month");
         setButtonLabel(voucherGiftLocation, row.dataset.voucherLocation || "Semua Lokasi");
         if (voucherGiftMessage) voucherGiftMessage.value = row.dataset.voucherMessage || "Thank you!";
@@ -13087,57 +21028,118 @@ function initVouchersPage() {
         closeGiftLocationPanel(false);
         syncGiftPreview();
     };
-    const saveServiceVoucher = () => {
+    const saveServiceVoucher = async () => {
         const name = String(voucherServiceName?.value || "").trim();
         if (!name) {
             voucherServiceName?.focus();
             return;
         }
-        upsertVoucherRow({
-            typeKey: "service",
-            typeCode: "S",
-            typeLabel: "Service Type",
-            name,
-            value: formatServiceSelectionLabel(servicePickerCommitted, getServiceCombinedEnabled(), serviceCombinedMax),
-            editorValue: sanitizeDigitsOnly(voucherServicePrice?.value || "0"),
-            duration: formatVoucherDuration(getButtonLabel(voucherServiceExpiry) || "After 1 Month"),
-            expiryLabel: getButtonLabel(voucherServiceExpiry) || "After 1 Month",
-            expiryValue: voucherOptionState.serviceSpecificDate || getButtonLabel(voucherServiceExpiry) || "After 1 Month",
-            location: getButtonLabel(voucherServiceLocation) || "Semua Lokasi",
-            status: isVoucherEditorActive(voucherServiceModalEl) ? "Active" : "Disable",
-            serviceName: formatServiceSelectionLabel(servicePickerCommitted, getServiceCombinedEnabled(), serviceCombinedMax),
-            message: String(voucherServiceMessage?.value || "").trim() || "Thank you!",
-            active: isVoucherEditorActive(voucherServiceModalEl),
-            servicesJson: JSON.stringify(servicePickerCommitted),
-            combineQuantity: getServiceCombinedEnabled(),
-            maxQuantity: serviceCombinedMax,
-        });
-        voucherServiceModal?.hide();
+        const formData = new FormData();
+        formData.append("_csrf", staffApiCsrfToken());
+        if (editingVoucherRow?.dataset.voucherId) {
+            formData.append("id", editingVoucherRow.dataset.voucherId);
+        }
+        formData.append("type", "service");
+        formData.append("name", name);
+        formData.append("value", "0");
+        formData.append("price_value", String(parseNumber(voucherServicePrice?.value || 0)));
+        formData.append("expiry_label", getButtonLabel(voucherServiceExpiry) || "After 1 Month");
+        formData.append("expiry_value", voucherOptionState.serviceSpecificDate || getButtonLabel(voucherServiceExpiry) || "After 1 Month");
+        formData.append("location", getButtonLabel(voucherServiceLocation) || "Semua Lokasi");
+        formData.append("message", String(voucherServiceMessage?.value || "").trim() || "Thank you!");
+        formData.append("active", isVoucherEditorActive(voucherServiceModalEl) ? "1" : "0");
+        formData.append("combine_quantity", getServiceCombinedEnabled() ? "1" : "0");
+        formData.append("max_quantity", String(serviceCombinedMax));
+        formData.append("service_items_json", JSON.stringify(servicePickerCommitted));
+
+        try {
+            const response = await staffApiRequest("/api/vouchers/save", {
+                method: "POST",
+                body: formData,
+            });
+            const voucher = response.voucher || {};
+            upsertVoucherRow({
+                id: voucher.id,
+                typeKey: voucher.type_key || "service",
+                typeCode: voucher.type_code || "S",
+                typeLabel: voucher.type_label || "Service Type",
+                name: voucher.name || name,
+                value: voucher.value || formatServiceSelectionLabel(servicePickerCommitted, getServiceCombinedEnabled(), serviceCombinedMax),
+                editorValue: voucher.editor_value || "0",
+                priceValue: voucher.price_value || voucher.editor_value || "0",
+                duration: voucher.duration || formatVoucherDuration(getButtonLabel(voucherServiceExpiry) || "After 1 Month"),
+                expiryLabel: voucher.expiry_label || getButtonLabel(voucherServiceExpiry) || "After 1 Month",
+                expiryValue: voucher.expiry_value || voucherOptionState.serviceSpecificDate || getButtonLabel(voucherServiceExpiry) || "After 1 Month",
+                location: voucher.location || getButtonLabel(voucherServiceLocation) || "Semua Lokasi",
+                status: voucher.status || (isVoucherEditorActive(voucherServiceModalEl) ? "Active" : "Disable"),
+                serviceName: voucher.service_name || formatServiceSelectionLabel(servicePickerCommitted, getServiceCombinedEnabled(), serviceCombinedMax),
+                message: voucher.message || String(voucherServiceMessage?.value || "").trim() || "Thank you!",
+                active: voucher.active ?? isVoucherEditorActive(voucherServiceModalEl),
+                servicesJson: voucher.services_json || JSON.stringify(servicePickerCommitted),
+                combineQuantity: voucher.combine_quantity ?? getServiceCombinedEnabled(),
+                maxQuantity: voucher.max_quantity || serviceCombinedMax,
+            });
+            voucherServiceModal?.hide();
+        } catch (error) {
+            window.alert(error.message || "Voucher layanan gagal disimpan.");
+        }
     };
-    const saveGiftVoucher = () => {
+    const saveGiftVoucher = async () => {
         const name = String(voucherGiftName?.value || "").trim();
         if (!name) {
             voucherGiftName?.focus();
             return;
         }
         const amountDigits = sanitizeDigitsOnly(voucherGiftValue?.value || "0");
-        upsertVoucherRow({
-            typeKey: "gift",
-            typeCode: "G",
-            typeLabel: "Gift Type",
-            name,
-            value: formatCurrency(amountDigits || 0),
-            editorValue: amountDigits || "0",
-            duration: formatVoucherDuration(getButtonLabel(voucherGiftExpiry) || "After 1 Month"),
-            expiryLabel: getButtonLabel(voucherGiftExpiry) || "After 1 Month",
-            expiryValue: voucherOptionState.giftSpecificDate || getButtonLabel(voucherGiftExpiry) || "After 1 Month",
-            location: getButtonLabel(voucherGiftLocation) || "Semua Lokasi",
-            status: isVoucherEditorActive(voucherGiftModalEl) ? "Active" : "Disable",
-            serviceName: "",
-            message: String(voucherGiftMessage?.value || "").trim() || "Thank you!",
-            active: isVoucherEditorActive(voucherGiftModalEl),
-        });
-        voucherGiftModal?.hide();
+        const formData = new FormData();
+        formData.append("_csrf", staffApiCsrfToken());
+        if (editingVoucherRow?.dataset.voucherId) {
+            formData.append("id", editingVoucherRow.dataset.voucherId);
+        }
+        formData.append("type", "gift");
+        formData.append("name", name);
+        formData.append("value", String(parseNumber(amountDigits || "0")));
+        formData.append("price_value", String(parseNumber(voucherGiftPrice?.value || 0)));
+        formData.append("expiry_label", getButtonLabel(voucherGiftExpiry) || "After 1 Month");
+        formData.append("expiry_value", voucherOptionState.giftSpecificDate || getButtonLabel(voucherGiftExpiry) || "After 1 Month");
+        formData.append("location", getButtonLabel(voucherGiftLocation) || "Semua Lokasi");
+        formData.append("message", String(voucherGiftMessage?.value || "").trim() || "Thank you!");
+        formData.append("active", isVoucherEditorActive(voucherGiftModalEl) ? "1" : "0");
+        formData.append("combine_quantity", "0");
+        formData.append("max_quantity", "1");
+        formData.append("service_items_json", "[]");
+
+        try {
+            const response = await staffApiRequest("/api/vouchers/save", {
+                method: "POST",
+                body: formData,
+            });
+            const voucher = response.voucher || {};
+            upsertVoucherRow({
+                id: voucher.id,
+                typeKey: voucher.type_key || "gift",
+                typeCode: voucher.type_code || "G",
+                typeLabel: voucher.type_label || "Gift Type",
+                name: voucher.name || name,
+                value: voucher.value || formatCurrency(amountDigits || 0),
+                editorValue: voucher.editor_value || amountDigits || "0",
+                priceValue: voucher.price_value || String(parseNumber(voucherGiftPrice?.value || 0)),
+                duration: voucher.duration || formatVoucherDuration(getButtonLabel(voucherGiftExpiry) || "After 1 Month"),
+                expiryLabel: voucher.expiry_label || getButtonLabel(voucherGiftExpiry) || "After 1 Month",
+                expiryValue: voucher.expiry_value || voucherOptionState.giftSpecificDate || getButtonLabel(voucherGiftExpiry) || "After 1 Month",
+                location: voucher.location || getButtonLabel(voucherGiftLocation) || "Semua Lokasi",
+                status: voucher.status || (isVoucherEditorActive(voucherGiftModalEl) ? "Active" : "Disable"),
+                serviceName: "",
+                message: voucher.message || String(voucherGiftMessage?.value || "").trim() || "Thank you!",
+                active: voucher.active ?? isVoucherEditorActive(voucherGiftModalEl),
+                servicesJson: "[]",
+                combineQuantity: false,
+                maxQuantity: 1,
+            });
+            voucherGiftModal?.hide();
+        } catch (error) {
+            window.alert(error.message || "Voucher hadiah gagal disimpan.");
+        }
     };
 
     tabs.forEach((tab) => {
@@ -13150,6 +21152,14 @@ function initVouchersPage() {
         button.addEventListener("click", () => {
             activeVoucherType = button.dataset.voucherType || "all";
             applyVoucherSearch();
+        });
+    });
+
+    shopOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeShop = option.dataset.vouchersShopOption || "Star Salon";
+            syncShopLabels();
+            syncShopOptions();
         });
     });
 
@@ -13244,10 +21254,25 @@ function initVouchersPage() {
         if (!editingDiscountRow) {
             return;
         }
-        editingDiscountRow.remove();
-        editingDiscountRow = null;
-        discountModal?.hide();
-        applyDiscountSearch();
+        const row = editingDiscountRow;
+        const run = async () => {
+            const formData = new FormData();
+            formData.append("_csrf", staffApiCsrfToken());
+            formData.append("id", row.dataset.discountId || "");
+            try {
+                await staffApiRequest("/api/vouchers/discounts/delete", {
+                    method: "POST",
+                    body: formData,
+                });
+                row.remove();
+                editingDiscountRow = null;
+                discountModal?.hide();
+                applyDiscountSearch();
+            } catch (error) {
+                window.alert(error.message || "Diskon gagal dihapus.");
+            }
+        };
+        run();
     });
 
     discountSave?.addEventListener("click", saveDiscount);
@@ -13460,6 +21485,26 @@ function initVouchersPage() {
         syncLocationOptions();
     });
     voucherServiceSave?.addEventListener("click", saveServiceVoucher);
+    voucherServiceDelete?.addEventListener("click", () => {
+        if (!editingVoucherRow?.dataset.voucherId) {
+            return;
+        }
+        const row = editingVoucherRow;
+        const formData = new FormData();
+        formData.append("_csrf", staffApiCsrfToken());
+        formData.append("id", row.dataset.voucherId);
+        staffApiRequest("/api/vouchers/delete", {
+            method: "POST",
+            body: formData,
+        }).then(() => {
+            row.remove();
+            updateVoucherTotal();
+            applyVoucherSearch();
+            voucherServiceModal?.hide();
+        }).catch((error) => {
+            window.alert(error.message || "Voucher gagal dihapus.");
+        });
+    });
 
     voucherGiftName?.addEventListener("input", syncGiftPreview);
     [voucherGiftValue, voucherGiftPrice].forEach((input) => {
@@ -13531,6 +21576,26 @@ function initVouchersPage() {
     });
     voucherGiftMessage?.addEventListener("input", syncGiftPreview);
     voucherGiftSave?.addEventListener("click", saveGiftVoucher);
+    voucherGiftDelete?.addEventListener("click", () => {
+        if (!editingVoucherRow?.dataset.voucherId) {
+            return;
+        }
+        const row = editingVoucherRow;
+        const formData = new FormData();
+        formData.append("_csrf", staffApiCsrfToken());
+        formData.append("id", row.dataset.voucherId);
+        staffApiRequest("/api/vouchers/delete", {
+            method: "POST",
+            body: formData,
+        }).then(() => {
+            row.remove();
+            updateVoucherTotal();
+            applyVoucherSearch();
+            voucherGiftModal?.hide();
+        }).catch((error) => {
+            window.alert(error.message || "Voucher gagal dihapus.");
+        });
+    });
     voucherGiftLocationPanelClose?.addEventListener("click", () => {
         closeGiftLocationPanel(false);
     });
@@ -13584,6 +21649,8 @@ function initVouchersPage() {
     applyTab("voucher");
     applyVoucherSearch();
     applyDiscountSearch();
+    syncShopLabels();
+    syncShopOptions();
 }
 
 function initAnalyticsPage() {
@@ -13592,15 +21659,148 @@ function initAnalyticsPage() {
         return;
     }
 
+    const contentPanel = shell.closest(".content-panel");
+    contentPanel?.classList.add("content-panel--analytics");
     const tabs = Array.from(shell.querySelectorAll(".analytics-tab"));
     const panels = Array.from(shell.querySelectorAll(".analytics-panel"));
+    const reportsPanel = shell.querySelector('[data-analytics-panel="reports"]');
+    const reportsScroll = shell.querySelector(".analytics-panel__scroll--reports");
+    const overviewCards = Array.from(shell.querySelectorAll("[data-analytics-card]"));
     const cards = Array.from(shell.querySelectorAll("[data-report-card]"));
     const groups = Array.from(shell.querySelectorAll("[data-report-group]"));
     const items = Array.from(shell.querySelectorAll("[data-report-item]"));
     const detail = shell.querySelector("[data-analytics-detail]");
+    const detailPanels = Array.from(shell.querySelectorAll("[data-analytics-detail-panel]"));
+    const backButton = shell.querySelector("[data-report-back]");
     const backLabel = shell.querySelector("[data-report-back] span");
     const popover = shell.querySelector("[data-report-popover]");
-    const closeButton = shell.querySelector("[data-report-close]");
+    const detailMenu = shell.querySelector("[data-analytics-detail-menu]");
+    const detailMenuToggle = shell.querySelector("[data-analytics-detail-menu-toggle]");
+    const detailMenuPanel = shell.querySelector("[data-analytics-detail-menu-panel]");
+    const detailMenuGroups = Array.from(shell.querySelectorAll("[data-analytics-detail-menu-group]"));
+    const detailMenuItems = Array.from(shell.querySelectorAll("[data-analytics-detail-menu-item]"));
+    const shopLabels = Array.from(shell.querySelectorAll("[data-analytics-shop-label]"));
+    const shopOptions = Array.from(document.querySelectorAll("[data-analytics-shop-option]"));
+    const staffLabels = Array.from(shell.querySelectorAll("[data-analytics-staff-label]"));
+    const staffOptions = Array.from(document.querySelectorAll("[data-analytics-staff-option]"));
+    const rangeLabels = Array.from(shell.querySelectorAll("[data-analytics-range-label]"));
+    const defaultBackLabel = backLabel?.textContent || "Ringkasan laporan";
+    let activeReportGroup = cards[0]?.dataset.reportKey || "finance";
+    let activeShop = shopLabels[0]?.textContent?.trim() || "Star Salon";
+    let activeStaff = staffLabels[0]?.textContent?.trim() || "Semua Staff";
+
+    const setExpandedOverviewCard = (targetCard, shouldExpand) => {
+        if (!(targetCard instanceof HTMLElement)) {
+            overviewCards.forEach((card) => {
+                card.classList.remove("is-expanded");
+                card.setAttribute("aria-expanded", "false");
+            });
+            return;
+        }
+        targetCard.classList.toggle("is-expanded", shouldExpand);
+        targetCard.setAttribute("aria-expanded", shouldExpand ? "true" : "false");
+    };
+
+    const closeReportPopover = () => {
+        popover?.classList.remove("is-open");
+    };
+
+    const toggleDetailMenu = (shouldOpen) => {
+        if (!(detailMenu instanceof HTMLElement) || !(detailMenuPanel instanceof HTMLElement) || !(detailMenuToggle instanceof HTMLElement)) {
+            return;
+        }
+
+        detailMenu.classList.toggle("is-open", shouldOpen);
+        detailMenuPanel.hidden = !shouldOpen;
+        detailMenuToggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+    };
+
+    const positionReportPopover = (groupKey) => {
+        if (!popover || !reportsPanel) {
+            return;
+        }
+
+        const anchorCard = cards.find((card) => card.dataset.reportKey === groupKey) || cards[0];
+        const reportGrid = shell.querySelector(".analytics-report-grid");
+        if (!(anchorCard instanceof HTMLElement) || !(reportGrid instanceof HTMLElement)) {
+            return;
+        }
+
+        const anchorLeft = anchorCard.offsetLeft;
+        const anchorTop = anchorCard.offsetTop + anchorCard.offsetHeight + 10;
+        const anchorWidth = anchorCard.offsetWidth;
+
+        popover.style.left = `${anchorLeft}px`;
+        popover.style.top = `${anchorTop}px`;
+        popover.style.width = `${anchorWidth}px`;
+        popover.style.maxWidth = `${anchorWidth}px`;
+    };
+
+    const openReportPopover = () => {
+        positionReportPopover(activeReportGroup);
+        popover?.classList.add("is-open");
+    };
+
+    const closeReportDetail = () => {
+        detail?.classList.remove("is-active");
+        reportsPanel?.classList.remove("is-detail-open");
+        toggleDetailMenu(false);
+        if (backLabel) {
+            backLabel.textContent = defaultBackLabel;
+        }
+        items.forEach((button) => button.classList.remove("is-active"));
+        detailPanels.forEach((panel, index) => {
+            panel.classList.toggle("is-active", index === 0);
+        });
+    };
+
+    const openReportDetailPanel = (panelKey) => {
+        const hasTargetPanel = detailPanels.some((panel) => panel.dataset.analyticsDetailPanel === panelKey);
+        detailPanels.forEach((panel, index) => {
+            const isActive = hasTargetPanel
+                ? panel.dataset.analyticsDetailPanel === panelKey
+                : panel.dataset.analyticsDetailPanel === "report-placeholder" || (panelKey === "" && index === 0);
+            panel.classList.toggle("is-active", isActive);
+        });
+    };
+
+    const syncDetailMenuGroup = () => {
+        detailMenuGroups.forEach((group) => {
+            group.classList.toggle("is-active", group.dataset.analyticsDetailMenuGroup === activeReportGroup);
+        });
+    };
+
+    const updateFilterLabel = (nodes, value) => {
+        nodes.forEach((node) => {
+            node.textContent = value;
+        });
+    };
+
+    const setActiveOption = (nodes, activeValue, attrName) => {
+        nodes.forEach((node) => {
+            node.classList.toggle("is-active", node.getAttribute(attrName) === activeValue);
+        });
+    };
+
+    const scrollActivePanelToTop = (behavior = "auto") => {
+        const activeScroll = shell.querySelector(".analytics-panel.is-active .analytics-panel__scroll");
+        if (!(activeScroll instanceof HTMLElement)) {
+            return;
+        }
+
+        activeScroll.scrollTo({ top: 0, behavior });
+    };
+
+    const scrollReportDetailIntoView = () => {
+        if (!(reportsScroll instanceof HTMLElement) || !(detail instanceof HTMLElement)) {
+            return;
+        }
+
+        reportsScroll.scrollTo({
+            top: Math.max(0, detail.offsetTop - 12),
+            behavior: "smooth",
+        });
+    };
 
     const applyTab = (tabName) => {
         tabs.forEach((tab) => {
@@ -13611,55 +21811,281 @@ function initAnalyticsPage() {
             panel.classList.toggle("is-active", panel.dataset.analyticsPanel === tabName);
         });
 
-        if (tabName === "reports") {
-            popover?.classList.add("is-open");
+        if (tabName === "overview") {
+            closeReportPopover();
+            closeReportDetail();
+            scrollActivePanelToTop();
+            return;
         }
+
+        closeReportDetail();
+        closeReportPopover();
+        scrollActivePanelToTop();
     };
 
     const applyReportGroup = (groupKey) => {
+        activeReportGroup = groupKey || activeReportGroup;
         cards.forEach((card) => {
-            card.classList.toggle("is-selected", card.dataset.reportKey === groupKey);
+            card.classList.toggle("is-selected", card.dataset.reportKey === activeReportGroup);
         });
 
         groups.forEach((group) => {
-            group.classList.toggle("is-active", group.dataset.reportGroup === groupKey);
+            group.classList.toggle("is-active", group.dataset.reportGroup === activeReportGroup);
         });
 
-        popover?.classList.add("is-open");
+        syncDetailMenuGroup();
+
+        closeReportDetail();
+        openReportPopover();
+    };
+
+    const openReportItemDetail = (itemButton) => {
+        if (!(itemButton instanceof HTMLElement)) {
+            return;
+        }
+
+        const targetGroup = itemButton.dataset.reportTarget || activeReportGroup;
+        activeReportGroup = targetGroup;
+        cards.forEach((card) => {
+            card.classList.toggle("is-selected", card.dataset.reportKey === activeReportGroup);
+        });
+        groups.forEach((group) => {
+            group.classList.toggle("is-active", group.dataset.reportGroup === activeReportGroup);
+        });
+        syncDetailMenuGroup();
+
+        items.forEach((button) => {
+            const isActive = button.dataset.reportTarget === targetGroup && button.dataset.reportItemKey === itemButton.dataset.reportItemKey;
+            button.classList.toggle("is-active", isActive);
+        });
+        detailMenuItems.forEach((button) => {
+            const isActive = button.dataset.reportTarget === targetGroup && button.dataset.reportItemKey === itemButton.dataset.reportItemKey;
+            button.classList.toggle("is-active", isActive);
+        });
+        if (backLabel) {
+            backLabel.textContent = itemButton.dataset.reportTitle || "Ringkasan laporan";
+        }
+        openReportDetailPanel(itemButton.dataset.reportItemKey || "");
+        reportsPanel?.classList.add("is-detail-open");
+        detail?.classList.add("is-active");
+        closeReportPopover();
+        toggleDetailMenu(false);
+        scrollReportDetailIntoView();
     };
 
     tabs.forEach((tab) => {
         tab.addEventListener("click", () => applyTab(tab.dataset.analyticsTab));
     });
 
+    shopOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeShop = option.getAttribute("data-analytics-shop-option") || "Star Salon";
+            updateFilterLabel(shopLabels, activeShop);
+            setActiveOption(shopOptions, activeShop, "data-analytics-shop-option");
+        });
+    });
+
+    staffOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeStaff = option.getAttribute("data-analytics-staff-option") || "Semua Staff";
+            updateFilterLabel(staffLabels, activeStaff);
+            setActiveOption(staffOptions, activeStaff, "data-analytics-staff-option");
+        });
+    });
+
+    overviewCards.forEach((card) => {
+        const toggleCard = () => {
+            const isExpanded = card.classList.contains("is-expanded");
+            setExpandedOverviewCard(card, !isExpanded);
+        };
+
+        card.addEventListener("click", toggleCard);
+        card.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") {
+                return;
+            }
+
+            event.preventDefault();
+            toggleCard();
+        });
+    });
+
     cards.forEach((card) => {
         card.addEventListener("click", () => {
-            applyReportGroup(card.dataset.reportKey);
+            const targetGroup = card.dataset.reportKey || activeReportGroup;
+            const isSameGroup = targetGroup === activeReportGroup;
+            const isPopoverOpen = popover?.classList.contains("is-open");
+            const isDetailOpen = detail?.classList.contains("is-active");
+
+            if (isSameGroup && isPopoverOpen && !isDetailOpen) {
+                closeReportPopover();
+                return;
+            }
+
+            applyReportGroup(targetGroup);
         });
     });
 
     items.forEach((item) => {
-        item.addEventListener("click", () => {
-            items.forEach((button) => button.classList.remove("is-active"));
-            item.classList.add("is-active");
-            if (backLabel) {
-                backLabel.textContent = item.dataset.reportTitle || "Ringkasan laporan";
+        item.addEventListener("click", () => openReportItemDetail(item));
+    });
+
+    detailMenuItems.forEach((item) => {
+        item.addEventListener("click", () => openReportItemDetail(item));
+    });
+
+    const dateModal = document.getElementById("analyticsDateFilterModal");
+    if (dateModal) {
+        const startInput = dateModal.querySelector(".js-analytics-start");
+        const endInput = dateModal.querySelector(".js-analytics-end");
+        const rangeInput = dateModal.querySelector(".js-analytics-date-range");
+        const resetBtn = dateModal.querySelector(".js-analytics-date-reset");
+        const applyBtn = dateModal.querySelector(".js-analytics-date-apply");
+        const presetButtons = Array.from(dateModal.querySelectorAll(".js-analytics-date-preset"));
+        const dateModalInstance = typeof bootstrap !== "undefined" ? bootstrap.Modal.getOrCreateInstance(dateModal) : null;
+        let activePreset = "7d";
+        let fp = null;
+        const today = new Date();
+        const displayDate = (value) => {
+            const date = new Date(`${value}T00:00:00`);
+            return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+        };
+        const formatYmdLocal = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        };
+        const presetLabel = (value) => value === "today" ? "Hari ini"
+            : value === "yesterday" ? "Kemarin"
+                : value === "this_month" ? "Bulan ini"
+                    : value === "30d" ? "30 hari sebelumnya"
+                        : value === "last_month" ? "Bulan kemarin"
+                            : value === "this_year" ? "Tahun ini"
+                                : value === "last_year" ? "Tahun kemarin"
+                                    : "7 hari sebelumnya";
+        const setRange = (start, end) => {
+            if (startInput) startInput.value = start || "";
+            if (endInput) endInput.value = end || "";
+            if (fp) {
+                fp.setDate([start, end].filter(Boolean), false, "Y-m-d");
             }
-            detail?.classList.add("is-active");
+        };
+        const syncPresets = () => {
+            presetButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.preset === activePreset);
+            });
+        };
+        const applyRange = ({ closeModal = true } = {}) => {
+            const start = startInput?.value || "";
+            const end = endInput?.value || "";
+            const label = start && end ? `${presetLabel(activePreset)}, ${displayDate(start)} - ${displayDate(end)}` : presetLabel(activePreset);
+            updateFilterLabel(rangeLabels, label);
+            if (closeModal) {
+                dateModalInstance?.hide();
+            }
+        };
+        if (rangeInput && typeof flatpickr !== "undefined") {
+            fp = flatpickr(rangeInput, {
+                mode: "range",
+                inline: true,
+                dateFormat: "Y-m-d",
+                defaultDate: [startInput?.value, endInput?.value].filter(Boolean),
+                onChange: (selectedDates) => {
+                    const [start, end] = selectedDates;
+                    if (startInput) startInput.value = start ? formatYmdLocal(start) : "";
+                    if (endInput) endInput.value = end ? formatYmdLocal(end) : "";
+                    if (start || end) {
+                        activePreset = "7d";
+                        syncPresets();
+                    }
+                },
+            });
+        }
+        presetButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                activePreset = button.dataset.preset || "7d";
+                const start = new Date(today);
+                const end = new Date(today);
+                if (activePreset === "yesterday") {
+                    start.setDate(today.getDate() - 1);
+                    end.setDate(today.getDate() - 1);
+                } else if (activePreset === "7d") {
+                    start.setDate(today.getDate() - 6);
+                } else if (activePreset === "30d") {
+                    start.setDate(today.getDate() - 29);
+                } else if (activePreset === "this_month") {
+                    start.setDate(1);
+                } else if (activePreset === "last_month") {
+                    start.setMonth(today.getMonth() - 1, 1);
+                    end.setMonth(today.getMonth(), 0);
+                } else if (activePreset === "this_year") {
+                    start.setMonth(0, 1);
+                } else if (activePreset === "last_year") {
+                    start.setFullYear(today.getFullYear() - 1, 0, 1);
+                    end.setFullYear(today.getFullYear() - 1, 11, 31);
+                }
+                setRange(formatYmdLocal(start), formatYmdLocal(end));
+                syncPresets();
+                applyRange();
+            });
         });
+        startInput?.addEventListener("change", () => {
+            setRange(startInput.value, endInput?.value || "");
+        });
+        endInput?.addEventListener("change", () => {
+            setRange(startInput?.value || "", endInput.value);
+        });
+        resetBtn?.addEventListener("click", () => {
+            activePreset = "7d";
+            const start = new Date(today);
+            start.setDate(today.getDate() - 6);
+            setRange(formatYmdLocal(start), formatYmdLocal(today));
+            syncPresets();
+        });
+        applyBtn?.addEventListener("click", () => applyRange());
+        syncPresets();
+        applyRange({ closeModal: false });
+    }
+
+    backButton?.addEventListener("click", () => {
+        closeReportDetail();
+        closeReportPopover();
     });
 
-    closeButton?.addEventListener("click", () => {
-        popover?.classList.remove("is-open");
+    detailMenuToggle?.addEventListener("click", () => {
+        const isOpen = detailMenu?.classList.contains("is-open");
+        toggleDetailMenu(!isOpen);
     });
 
-    shell.querySelector("[data-report-back]")?.addEventListener("click", () => {
-        detail?.classList.remove("is-active");
-        popover?.classList.add("is-open");
+    window.addEventListener("resize", () => {
+        if (popover?.classList.contains("is-open")) {
+            positionReportPopover(activeReportGroup);
+        }
     });
 
+    document.addEventListener("click", (event) => {
+        if (!(event.target instanceof HTMLElement)) {
+            return;
+        }
+
+        if (!detailMenu?.classList.contains("is-open")) {
+            return;
+        }
+
+        if (event.target.closest("[data-analytics-detail-menu]")) {
+            return;
+        }
+
+        toggleDetailMenu(false);
+    });
+
+    setExpandedOverviewCard(null);
     applyTab("overview");
-    applyReportGroup("finance");
+    applyReportGroup(activeReportGroup);
+    syncDetailMenuGroup();
+    toggleDetailMenu(false);
+    closeReportPopover();
 }
 
 function initReviewsPage() {
@@ -13670,6 +22096,50 @@ function initReviewsPage() {
 
     const tabs = Array.from(shell.querySelectorAll(".reviews-tab"));
     const panels = Array.from(shell.querySelectorAll(".reviews-panel"));
+    const shopLabels = Array.from(shell.querySelectorAll("[data-reviews-shop-label]"));
+    const shopOptions = Array.from(document.querySelectorAll("[data-reviews-shop-option]"));
+    const ratingLabel = shell.querySelector("[data-reviews-rating-label]");
+    const ratingOptions = Array.from(document.querySelectorAll("[data-review-rating-option]"));
+    const rangeLabels = Array.from(shell.querySelectorAll("[data-reviews-range-label]"));
+    const logLabel = shell.querySelector("[data-reviews-log-label]");
+    const logOptions = Array.from(document.querySelectorAll("[data-review-log-option]"));
+    const reviewSearch = shell.querySelector(".js-reviews-search");
+    const reviewCards = Array.from(shell.querySelectorAll(".js-review-card"));
+    const reviewEmpty = shell.querySelector(".js-reviews-empty");
+    const logSearch = shell.querySelector(".js-reviews-log-search");
+    const logRows = Array.from(shell.querySelectorAll(".js-review-log-row"));
+    let activeRating = "All Ratings";
+    let activeLogCustomer = "Pelanggan";
+    let activeStartDate = "";
+    let activeEndDate = "";
+
+    const applyReviewFilters = () => {
+        const query = normalize(reviewSearch?.value);
+        let visibleCount = 0;
+        reviewCards.forEach((card) => {
+            const matchesRating = activeRating === "All Ratings" || card.dataset.reviewRating === activeRating;
+            const matchesQuery = !query || normalize(card.dataset.search).includes(query);
+            const reviewDate = card.dataset.reviewDate || "";
+            const matchesDate = (!activeStartDate || reviewDate >= activeStartDate) && (!activeEndDate || reviewDate <= activeEndDate);
+            const isVisible = matchesRating && matchesQuery && matchesDate;
+            card.hidden = !isVisible;
+            if (isVisible) {
+                visibleCount += 1;
+            }
+        });
+        if (reviewEmpty instanceof HTMLElement) {
+            reviewEmpty.hidden = visibleCount > 0;
+        }
+    };
+
+    const applyLogFilters = () => {
+        const query = normalize(logSearch?.value);
+        logRows.forEach((row) => {
+            const matchesCustomer = activeLogCustomer === "Pelanggan" || row.dataset.logCustomer === activeLogCustomer;
+            const matchesQuery = !query || normalize(row.dataset.search).includes(query);
+            row.hidden = !(matchesCustomer && matchesQuery);
+        });
+    };
 
     const applyTab = (tabName) => {
         tabs.forEach((tab) => {
@@ -13685,7 +22155,170 @@ function initReviewsPage() {
         tab.addEventListener("click", () => applyTab(tab.dataset.reviewsTab));
     });
 
+    shopOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            const label = option.getAttribute("data-reviews-shop-option") || "Star Salon";
+            shopLabels.forEach((node) => {
+                node.textContent = label;
+            });
+            shopOptions.forEach((item) => {
+                item.classList.toggle("is-active", item === option);
+            });
+        });
+    });
+
+    ratingOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            const value = option.getAttribute("data-review-rating-option") || "All Ratings";
+            activeRating = value;
+            if (ratingLabel) {
+                ratingLabel.textContent = value === "All Ratings" ? value : `${value} Star`;
+            }
+            ratingOptions.forEach((item) => {
+                item.classList.toggle("is-active", item === option);
+            });
+            applyReviewFilters();
+        });
+    });
+
+    logOptions.forEach((option) => {
+        option.addEventListener("click", () => {
+            activeLogCustomer = option.getAttribute("data-review-log-option") || "Pelanggan";
+            if (logLabel) {
+                logLabel.textContent = activeLogCustomer;
+            }
+            logOptions.forEach((item) => {
+                item.classList.toggle("is-active", item === option);
+            });
+            applyLogFilters();
+        });
+    });
+
+    reviewSearch?.addEventListener("input", applyReviewFilters);
+    logSearch?.addEventListener("input", applyLogFilters);
+
+    const dateModal = document.getElementById("reviewsDateFilterModal");
+    if (dateModal) {
+        const startInput = dateModal.querySelector(".js-reviews-start");
+        const endInput = dateModal.querySelector(".js-reviews-end");
+        const rangeInput = dateModal.querySelector(".js-reviews-date-range");
+        const resetBtn = dateModal.querySelector(".js-reviews-date-reset");
+        const applyBtn = dateModal.querySelector(".js-reviews-date-apply");
+        const presetButtons = Array.from(dateModal.querySelectorAll(".js-reviews-date-preset"));
+        const dateModalInstance = typeof bootstrap !== "undefined" ? bootstrap.Modal.getOrCreateInstance(dateModal) : null;
+        let activePreset = "7d";
+        let fp = null;
+        const today = new Date();
+        const displayDate = (value) => {
+            const date = new Date(`${value}T00:00:00`);
+            return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+        };
+        const formatYmdLocal = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const day = String(date.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        };
+        const presetLabel = (value) => value === "today" ? "Hari ini"
+            : value === "yesterday" ? "Kemarin"
+                : value === "this_month" ? "Bulan ini"
+                    : value === "30d" ? "30 hari sebelumnya"
+                        : value === "last_month" ? "Bulan kemarin"
+                            : value === "this_year" ? "Tahun ini"
+                                : value === "last_year" ? "Tahun kemarin"
+                                    : "7 hari sebelumnya";
+        const setRange = (start, end) => {
+            if (startInput) startInput.value = start || "";
+            if (endInput) endInput.value = end || "";
+            if (fp) {
+                fp.setDate([start, end].filter(Boolean), false, "Y-m-d");
+            }
+        };
+        const syncPresets = () => {
+            presetButtons.forEach((button) => {
+                button.classList.toggle("is-active", button.dataset.preset === activePreset);
+            });
+        };
+        const applyRange = ({ closeModal = true } = {}) => {
+            const start = startInput?.value || "";
+            const end = endInput?.value || "";
+            activeStartDate = start;
+            activeEndDate = end;
+            const label = start && end ? `${presetLabel(activePreset)}, ${displayDate(start)} - ${displayDate(end)}` : presetLabel(activePreset);
+            rangeLabels.forEach((node) => {
+                node.textContent = label;
+            });
+            applyReviewFilters();
+            if (closeModal) {
+                dateModalInstance?.hide();
+            }
+        };
+        if (rangeInput && typeof flatpickr !== "undefined") {
+            fp = flatpickr(rangeInput, {
+                mode: "range",
+                inline: true,
+                dateFormat: "Y-m-d",
+                defaultDate: [startInput?.value, endInput?.value].filter(Boolean),
+                onChange: (selectedDates) => {
+                    const [start, end] = selectedDates;
+                    if (startInput) startInput.value = start ? formatYmdLocal(start) : "";
+                    if (endInput) endInput.value = end ? formatYmdLocal(end) : "";
+                    if (start || end) {
+                        activePreset = "7d";
+                        syncPresets();
+                    }
+                },
+            });
+        }
+        presetButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                activePreset = button.dataset.preset || "7d";
+                const start = new Date(today);
+                const end = new Date(today);
+                if (activePreset === "yesterday") {
+                    start.setDate(today.getDate() - 1);
+                    end.setDate(today.getDate() - 1);
+                } else if (activePreset === "7d") {
+                    start.setDate(today.getDate() - 6);
+                } else if (activePreset === "30d") {
+                    start.setDate(today.getDate() - 29);
+                } else if (activePreset === "this_month") {
+                    start.setDate(1);
+                } else if (activePreset === "last_month") {
+                    start.setMonth(today.getMonth() - 1, 1);
+                    end.setMonth(today.getMonth(), 0);
+                } else if (activePreset === "this_year") {
+                    start.setMonth(0, 1);
+                } else if (activePreset === "last_year") {
+                    start.setFullYear(today.getFullYear() - 1, 0, 1);
+                    end.setFullYear(today.getFullYear() - 1, 11, 31);
+                }
+                setRange(formatYmdLocal(start), formatYmdLocal(end));
+                syncPresets();
+                applyRange();
+            });
+        });
+        startInput?.addEventListener("change", () => {
+            setRange(startInput.value, endInput?.value || "");
+        });
+        endInput?.addEventListener("change", () => {
+            setRange(startInput?.value || "", endInput.value);
+        });
+        resetBtn?.addEventListener("click", () => {
+            activePreset = "7d";
+            const start = new Date(today);
+            start.setDate(today.getDate() - 6);
+            setRange(formatYmdLocal(start), formatYmdLocal(today));
+            syncPresets();
+        });
+        applyBtn?.addEventListener("click", () => applyRange());
+        syncPresets();
+        applyRange({ closeModal: false });
+    }
+
     applyTab("customer");
+    applyReviewFilters();
+    applyLogFilters();
 }
 
 function initPOS() {
@@ -13765,4 +22398,198 @@ function initPermissionLoader() {
         staffSelect.addEventListener("change", applyPermissions);
         applyPermissions();
     });
+}
+
+function initBusinessSettingsPage() {
+    const form = document.querySelector(".js-business-settings-form");
+    if (!form) {
+        return;
+    }
+
+    const hiddenInput = form.querySelector(".js-business-hours-json");
+    const rows = Array.from(form.querySelectorAll("[data-business-hours-row]"));
+    const defaultButton = form.querySelector(".js-business-hours-default");
+    const hourOptions = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
+    const minuteOptions = Array.from({ length: 12 }, (_, index) => String(index * 5).padStart(2, "0"));
+    let pickerEl = null;
+    let activeInput = null;
+
+    const buildState = () => rows.map((row) => ({
+        key: row.dataset.dayKey || "",
+        label: row.querySelector(".business-hours-row__label")?.textContent?.trim() || "Hari",
+        enabled: row.querySelector(".js-business-day-enabled")?.checked || false,
+        open: row.querySelector('[data-time-field="open"]')?.value || "08:00",
+        close: row.querySelector('[data-time-field="close"]')?.value || "22:00",
+    }));
+
+    const syncHiddenValue = () => {
+        if (hiddenInput) {
+            hiddenInput.value = JSON.stringify(buildState());
+        }
+    };
+
+    const syncRowState = (row) => {
+        const enabled = row.querySelector(".js-business-day-enabled")?.checked || false;
+        row.classList.toggle("is-disabled", !enabled);
+        row.querySelectorAll(".js-business-time-trigger").forEach((button) => {
+            button.disabled = !enabled;
+        });
+    };
+
+    const parseParts = (value) => {
+        const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
+        return match ? { hour: match[1], minute: match[2] } : { hour: "08", minute: "00" };
+    };
+
+    const closePicker = () => {
+        if (pickerEl) {
+            pickerEl.hidden = true;
+        }
+        activeInput = null;
+    };
+
+    const ensurePicker = () => {
+        if (pickerEl) {
+            return pickerEl;
+        }
+
+        pickerEl = document.createElement("div");
+        pickerEl.className = "business-time-picker";
+        pickerEl.hidden = true;
+        pickerEl.innerHTML = `
+            <div class="business-time-picker__col">
+                <div class="business-time-picker__label">HH</div>
+                <div class="business-time-picker__list" data-time-hours></div>
+            </div>
+            <div class="business-time-picker__col">
+                <div class="business-time-picker__label">mm</div>
+                <div class="business-time-picker__list" data-time-minutes></div>
+            </div>
+        `;
+        document.body.appendChild(pickerEl);
+
+        pickerEl.addEventListener("click", (event) => {
+            const option = event.target instanceof HTMLElement ? event.target.closest("[data-time-part]") : null;
+            if (!option || !activeInput) {
+                return;
+            }
+
+            const parts = parseParts(activeInput.value);
+            parts[option.dataset.timePart === "hour" ? "hour" : "minute"] = option.dataset.timeValue || "00";
+            const nextValue = `${parts.hour}:${parts.minute}`;
+            activeInput.value = nextValue;
+            const display = activeInput.parentElement?.querySelector(".js-business-time-display");
+            if (display) {
+                display.textContent = nextValue;
+            }
+
+            if (option.dataset.timePart === "minute") {
+                closePicker();
+                syncHiddenValue();
+            } else {
+                renderPicker(activeInput);
+            }
+        });
+
+        return pickerEl;
+    };
+
+    const positionPicker = (trigger) => {
+        const picker = ensurePicker();
+        const rect = trigger.getBoundingClientRect();
+        const width = Math.max(190, rect.width);
+        const height = 220;
+        const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
+        const topBelow = rect.bottom + 6;
+        const top = topBelow + height > window.innerHeight - 12 ? Math.max(12, rect.top - height - 6) : topBelow;
+
+        picker.style.width = `${width}px`;
+        picker.style.left = `${left}px`;
+        picker.style.top = `${top}px`;
+    };
+
+    const renderPicker = (input) => {
+        const picker = ensurePicker();
+        const parts = parseParts(input.value);
+        const renderOption = (part, value) => `
+            <button class="business-time-picker__option ${parts[part] === value ? "is-active" : ""}" type="button" data-time-part="${part}" data-time-value="${value}">
+                ${value}
+            </button>
+        `;
+
+        picker.querySelector("[data-time-hours]").innerHTML = hourOptions.map((value) => renderOption("hour", value)).join("");
+        picker.querySelector("[data-time-minutes]").innerHTML = minuteOptions.map((value) => renderOption("minute", value)).join("");
+        activeInput = input;
+        positionPicker(input.parentElement);
+        picker.hidden = false;
+    };
+
+    rows.forEach((row) => {
+        syncRowState(row);
+
+        row.querySelector(".js-business-day-enabled")?.addEventListener("change", () => {
+            syncRowState(row);
+            syncHiddenValue();
+        });
+
+        row.querySelectorAll(".js-business-time-trigger").forEach((button) => {
+            button.addEventListener("click", (event) => {
+                event.preventDefault();
+                const input = button.querySelector(".js-business-time-input");
+                if (!(input instanceof HTMLInputElement) || button.disabled) {
+                    return;
+                }
+                renderPicker(input);
+            });
+        });
+    });
+
+    defaultButton?.addEventListener("click", () => {
+        const defaults = {
+            minggu: { enabled: true, open: "03:00", close: "23:00" },
+            senin: { enabled: true, open: "00:00", close: "23:00" },
+            selasa: { enabled: false, open: "08:00", close: "22:00" },
+            rabu: { enabled: false, open: "08:00", close: "22:00" },
+            kamis: { enabled: false, open: "08:00", close: "22:00" },
+            jumat: { enabled: false, open: "08:00", close: "22:00" },
+            sabtu: { enabled: true, open: "08:00", close: "22:00" },
+        };
+
+        rows.forEach((row) => {
+            const config = defaults[row.dataset.dayKey || ""] || defaults.senin;
+            const enabled = row.querySelector(".js-business-day-enabled");
+            const openInput = row.querySelector('[data-time-field="open"]');
+            const closeInput = row.querySelector('[data-time-field="close"]');
+            const displays = row.querySelectorAll(".js-business-time-display");
+
+            if (enabled instanceof HTMLInputElement) {
+                enabled.checked = config.enabled;
+            }
+            if (openInput instanceof HTMLInputElement) {
+                openInput.value = config.open;
+            }
+            if (closeInput instanceof HTMLInputElement) {
+                closeInput.value = config.close;
+            }
+            if (displays[0]) displays[0].textContent = config.open;
+            if (displays[1]) displays[1].textContent = config.close;
+            syncRowState(row);
+        });
+
+        syncHiddenValue();
+    });
+
+    document.addEventListener("click", (event) => {
+        if (!pickerEl || pickerEl.hidden) {
+            return;
+        }
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.closest(".business-time-picker") || target.closest(".js-business-time-trigger"))) {
+            return;
+        }
+        closePicker();
+    });
+
+    window.addEventListener("resize", closePicker);
+    syncHiddenValue();
 }

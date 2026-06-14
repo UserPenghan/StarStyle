@@ -391,15 +391,18 @@ $inventoryTabs = [
                     </tbody>
                 </table>
             </div>
-            <div class="customers-table-footer inventory-table-footer">
-                <div class="js-inventory-total">Total <?= e((string) count($productRows)) ?></div>
-                <button class="dashboard-filter customers-mini-filter" type="button"><span>20/page</span><i class="bi bi-chevron-down"></i></button>
-                <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                <span class="customers-pagination-current">1</span>
-                <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                <div>Go to</div>
-                <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                <button class="dashboard-filter customers-mini-input inventory-footer-caret" type="button"><i class="bi bi-chevron-up"></i></button>
+            <div class="sales-pagination sales-pagination--services" data-inventory-pagination="products">
+                <div class="sales-pagination__meta">Total <span class="js-inventory-total"><?= e((string) count($productRows)) ?></span></div>
+                <div class="sales-pagination__page-size">
+                    <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                    <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                </div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                <div class="sales-pagination__pages" data-pagination-page-list></div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                <div class="sales-pagination__goto">Go to</div>
+                <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
             </div>
         </div>
     </div>
@@ -498,15 +501,18 @@ $inventoryTabs = [
                     </tbody>
                 </table>
             </div>
-            <div class="customers-table-footer inventory-table-footer">
-                <div class="js-inventory-purchase-total">Total <?= e((string) count($purchaseRows)) ?></div>
-                <button class="dashboard-filter customers-mini-filter" type="button"><span>20/page</span><i class="bi bi-chevron-down"></i></button>
-                <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                <span class="customers-pagination-current">1</span>
-                <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                <div>Go to</div>
-                <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                <button class="dashboard-filter customers-mini-input inventory-footer-caret" type="button"><i class="bi bi-chevron-up"></i></button>
+            <div class="sales-pagination sales-pagination--services" data-inventory-pagination="purchases">
+                <div class="sales-pagination__meta">Total <span class="js-inventory-purchase-total"><?= e((string) count($purchaseRows)) ?></span></div>
+                <div class="sales-pagination__page-size">
+                    <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                    <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                </div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                <div class="sales-pagination__pages" data-pagination-page-list></div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                <div class="sales-pagination__goto">Go to</div>
+                <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
             </div>
         </div>
     </div>
@@ -601,34 +607,46 @@ $inventoryTabs = [
                     </tbody>
                 </table>
             </div>
-            <div class="customers-table-footer inventory-table-footer">
-                <div class="js-inventory-opname-total">Total <?= e((string) count($opnameRows)) ?></div>
-                <button class="dashboard-filter customers-mini-filter" type="button"><span>20/page</span><i class="bi bi-chevron-down"></i></button>
-                <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                <span class="customers-pagination-current">1</span>
-                <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                <div>Go to</div>
-                <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                <button class="dashboard-filter customers-mini-input inventory-footer-caret" type="button"><i class="bi bi-chevron-up"></i></button>
+            <div class="sales-pagination sales-pagination--services" data-inventory-pagination="opname">
+                <div class="sales-pagination__meta">Total <span class="js-inventory-opname-total"><?= e((string) count($opnameRows)) ?></span></div>
+                <div class="sales-pagination__page-size">
+                    <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                    <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                </div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                <div class="sales-pagination__pages" data-pagination-page-list></div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                <div class="sales-pagination__goto">Go to</div>
+                <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
             </div>
         </div>
     </div>
 
     <div class="inventory-panel" data-inventory-panel="master" hidden>
-        <div class="inventory-master-tabs" role="tablist" aria-label="Master data inventory">
-            <button class="inventory-master-tab is-active" type="button" data-inventory-master-tab="brands" aria-selected="true">Merk</button>
-            <button class="inventory-master-tab" type="button" data-inventory-master-tab="categories" aria-selected="false">Kategori</button>
-            <button class="inventory-master-tab" type="button" data-inventory-master-tab="suppliers" aria-selected="false">Supplier</button>
-        </div>
-
-        <div class="inventory-master-panel is-active" data-inventory-master-panel="brands">
-            <div class="inventory-toolbar inventory-toolbar--simple">
-                <label class="sales-search-field inventory-search-field">
+        <div class="inventory-master-header">
+            <div class="inventory-master-tabs" role="tablist" aria-label="Master data inventory">
+                <button class="inventory-master-tab is-active" type="button" data-inventory-master-tab="brands" aria-selected="true">Merk</button>
+                <button class="inventory-master-tab" type="button" data-inventory-master-tab="categories" aria-selected="false">Kategori</button>
+                <button class="inventory-master-tab" type="button" data-inventory-master-tab="suppliers" aria-selected="false">Supplier</button>
+            </div>
+            <div class="inventory-master-searches">
+                <label class="sales-search-field inventory-search-field inventory-master-search is-active" data-inventory-master-search="brands">
                     <input class="js-inventory-brand-search" type="search" autocomplete="off" aria-label="Cari merk" placeholder="Ketik kata kunci">
                     <i class="bi bi-search"></i>
                 </label>
+                <label class="sales-search-field inventory-search-field inventory-master-search" data-inventory-master-search="categories" hidden>
+                    <input class="js-inventory-category-search" type="search" autocomplete="off" aria-label="Cari kategori" placeholder="Ketik kata kunci">
+                    <i class="bi bi-search"></i>
+                </label>
+                <label class="sales-search-field inventory-search-field inventory-master-search" data-inventory-master-search="suppliers" hidden>
+                    <input class="js-inventory-supplier-search" type="search" autocomplete="off" aria-label="Cari supplier" placeholder="Ketik kata kunci">
+                    <i class="bi bi-search"></i>
+                </label>
             </div>
+        </div>
 
+        <div class="inventory-master-panel is-active" data-inventory-master-panel="brands">
             <div class="inventory-table-card">
                 <div class="inventory-table-wrap">
                     <table class="customers-table inventory-table inventory-table--simple">
@@ -650,27 +668,23 @@ $inventoryTabs = [
                         </tbody>
                     </table>
                 </div>
-                <div class="customers-table-footer inventory-table-footer">
-                    <div class="js-inventory-brand-total">Total <?= e((string) count($brandRows)) ?></div>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><span>20/page</span><i class="bi bi-chevron-down"></i></button>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                    <span class="customers-pagination-current">1</span>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                    <div>Go to</div>
-                    <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                    <button class="dashboard-filter customers-mini-input inventory-footer-caret" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services" data-inventory-pagination="brands">
+                    <div class="sales-pagination__meta">Total <span class="js-inventory-brand-total"><?= e((string) count($brandRows)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                    </div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-pagination-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
         </div>
 
         <div class="inventory-master-panel" data-inventory-master-panel="categories" hidden>
-            <div class="inventory-toolbar inventory-toolbar--simple">
-                <label class="sales-search-field inventory-search-field">
-                    <input class="js-inventory-category-search" type="search" autocomplete="off" aria-label="Cari kategori" placeholder="Ketik kata kunci">
-                    <i class="bi bi-search"></i>
-                </label>
-            </div>
-
             <div class="inventory-table-card">
                 <div class="inventory-table-wrap">
                     <table class="customers-table inventory-table inventory-table--simple">
@@ -692,27 +706,23 @@ $inventoryTabs = [
                         </tbody>
                     </table>
                 </div>
-                <div class="customers-table-footer inventory-table-footer">
-                    <div class="js-inventory-category-total">Total <?= e((string) count($categoryRows)) ?></div>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><span>20/page</span><i class="bi bi-chevron-down"></i></button>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                    <span class="customers-pagination-current">1</span>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                    <div>Go to</div>
-                    <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                    <button class="dashboard-filter customers-mini-input inventory-footer-caret" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services" data-inventory-pagination="categories">
+                    <div class="sales-pagination__meta">Total <span class="js-inventory-category-total"><?= e((string) count($categoryRows)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                    </div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-pagination-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
         </div>
 
         <div class="inventory-master-panel" data-inventory-master-panel="suppliers" hidden>
-            <div class="inventory-toolbar inventory-toolbar--simple">
-                <label class="sales-search-field inventory-search-field">
-                    <input class="js-inventory-supplier-search" type="search" autocomplete="off" aria-label="Cari supplier" placeholder="Ketik kata kunci">
-                    <i class="bi bi-search"></i>
-                </label>
-            </div>
-
             <div class="inventory-table-card">
                 <div class="inventory-table-wrap">
                     <table class="customers-table inventory-table inventory-table--suppliers">
@@ -747,15 +757,18 @@ $inventoryTabs = [
                         </tbody>
                     </table>
                 </div>
-                <div class="customers-table-footer inventory-table-footer">
-                    <div class="js-inventory-supplier-total">Total <?= e((string) count($supplierRows)) ?></div>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><span>20/page</span><i class="bi bi-chevron-down"></i></button>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                    <span class="customers-pagination-current">1</span>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                    <div>Go to</div>
-                    <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                    <button class="dashboard-filter customers-mini-input inventory-footer-caret" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services" data-inventory-pagination="suppliers">
+                    <div class="sales-pagination__meta">Total <span class="js-inventory-supplier-total"><?= e((string) count($supplierRows)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                    </div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-pagination-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
         </div>

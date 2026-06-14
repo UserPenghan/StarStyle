@@ -11,6 +11,7 @@
                 </div>
                 <form method="post" action="<?= e(url('/customer/login')) ?>" class="vstack gap-3">
                     <?= csrf_field() ?>
+                    <input type="hidden" name="redirect" value="<?= e((string) ($redirectAfterLogin ?? '')) ?>">
                     <div>
                         <label class="form-label">Email</label>
                         <input class="form-control" type="email" name="email" placeholder="customer@starstyle.test">

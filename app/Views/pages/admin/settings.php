@@ -1,3 +1,12 @@
+<?php
+$hoursSchedule = is_array($settings['hours_schedule'] ?? null) ? $settings['hours_schedule'] : [];
+$timezoneOptions = [
+    'Asia/Jakarta' => '(GMT +07:00) Asia/Jakarta',
+    'Asia/Makassar' => '(GMT +08:00) Asia/Makassar',
+    'Asia/Jayapura' => '(GMT +09:00) Asia/Jayapura',
+    'Asia/Bangkok' => '(GMT +07:00) Asia/Bangkok',
+];
+?>
 <div class="row g-4">
     <div class="col-xl-5">
         <div class="page-card">
@@ -7,22 +16,65 @@
                     <h2 class="section-title mb-0">Profil Salon</h2>
                 </div>
             </div>
-            <div class="soft-card mb-3">
-                <div class="small text-muted">Nama bisnis</div>
-                <strong><?= e($settings['business_name']) ?></strong>
-            </div>
-            <div class="soft-card mb-3">
-                <div class="small text-muted">Jam operasional</div>
-                <strong><?= e($settings['hours']) ?></strong>
-            </div>
-            <div class="soft-card mb-3">
-                <div class="small text-muted">Alamat</div>
-                <strong><?= e($settings['address']) ?></strong>
-            </div>
-            <div class="soft-card">
-                <div class="small text-muted">Channel notifikasi</div>
-                <strong><?= e($settings['notification_channel']) ?></strong>
-            </div>
+            <form method="post" action="<?= e(url('/settings/business-profile')) ?>" class="vstack gap-3 js-business-settings-form">
+                <?= csrf_field() ?>
+
+                <div class="soft-card">
+                    <label class="form-label small text-muted mb-2">Nama bisnis</label>
+                    <input class="form-control" type="text" name="business_name" value="<?= e((string) ($settings['business_name'] ?? '')) ?>" placeholder="Nama bisnis">
+                </div>
+
+                <div class="soft-card business-hours-card">
+                    <div>
+                        <label class="form-label small text-muted mb-2">Zona waktu</label>
+                        <select class="form-select js-business-timezone" name="timezone">
+                            <?php foreach ($timezoneOptions as $timezoneValue => $timezoneLabel): ?>
+                                <option value="<?= e($timezoneValue) ?>" <?= (($settings['timezone'] ?? '') === $timezoneValue) ? 'selected' : '' ?>><?= e($timezoneLabel) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <button class="btn btn-light business-hours-card__default js-business-hours-default" type="button">Sesuaikan Jam bisnis dengan default</button>
+
+                    <input class="js-business-hours-json" type="hidden" name="hours_schedule_json" value="<?= e((string) json_encode($hoursSchedule, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>">
+
+                    <div class="business-hours-list">
+                        <?php foreach ($hoursSchedule as $day): ?>
+                            <div class="business-hours-row<?= empty($day['enabled']) ? ' is-disabled' : '' ?>" data-business-hours-row data-day-key="<?= e((string) ($day['key'] ?? '')) ?>">
+                                <label class="business-hours-row__toggle">
+                                    <input class="js-business-day-enabled" type="checkbox" <?= !empty($day['enabled']) ? 'checked' : '' ?>>
+                                    <span class="business-hours-row__check"><i class="bi bi-check-lg"></i></span>
+                                    <span class="business-hours-row__label"><?= e((string) ($day['label'] ?? 'Hari')) ?></span>
+                                </label>
+
+                                <button class="business-hours-row__time js-business-time-trigger" type="button" data-time-target="open" <?= empty($day['enabled']) ? 'disabled' : '' ?>>
+                                    <i class="bi bi-clock"></i>
+                                    <span class="js-business-time-display"><?= e((string) ($day['open'] ?? '08:00')) ?></span>
+                                    <input class="js-business-time-input" type="hidden" data-time-field="open" value="<?= e((string) ($day['open'] ?? '08:00')) ?>">
+                                </button>
+
+                                <button class="business-hours-row__time js-business-time-trigger" type="button" data-time-target="close" <?= empty($day['enabled']) ? 'disabled' : '' ?>>
+                                    <i class="bi bi-clock"></i>
+                                    <span class="js-business-time-display"><?= e((string) ($day['close'] ?? '22:00')) ?></span>
+                                    <input class="js-business-time-input" type="hidden" data-time-field="close" value="<?= e((string) ($day['close'] ?? '22:00')) ?>">
+                                </button>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <div class="soft-card">
+                    <label class="form-label small text-muted mb-2">Alamat</label>
+                    <textarea class="form-control" name="address" rows="3" placeholder="Alamat bisnis"><?= e((string) ($settings['address'] ?? '')) ?></textarea>
+                </div>
+
+                <div class="soft-card">
+                    <label class="form-label small text-muted mb-2">Channel notifikasi</label>
+                    <input class="form-control" type="text" name="notification_channel" value="<?= e((string) ($settings['notification_channel'] ?? '')) ?>" placeholder="Contoh: Email + WhatsApp">
+                </div>
+
+                <button class="btn btn-dark rounded-pill" type="submit">Simpan Profil Salon</button>
+            </form>
         </div>
     </div>
     <div class="col-xl-7">

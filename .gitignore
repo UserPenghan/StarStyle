@@ -1,2 +1,12 @@
+/.env
 /storage/cache/*
 !/storage/cache/.gitkeep
+!/storage/cache/payment-proofs/
+/storage/cache/payment-proofs/*
+!/storage/cache/payment-proofs/.gitkeep
+/tmp_snapshots/
+/New folder/
+/codex-changes.patch
+/codex-changes.php-only.patch
+/working-tree.patch
+/working-tree.untracked.txt

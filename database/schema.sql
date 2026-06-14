@@ -136,15 +136,23 @@ CREATE TABLE bookings (
     end_at DATETIME NOT NULL,
     status VARCHAR(30) NOT NULL,
     notes TEXT NULL,
-    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+    cancel_reason VARCHAR(255) NULL,
+    products_json LONGTEXT NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE booking_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     booking_id BIGINT UNSIGNED NOT NULL,
     service_id BIGINT UNSIGNED NOT NULL,
+    staff_id BIGINT UNSIGNED NULL,
     duration_minutes INT NOT NULL,
-    price DECIMAL(12,2) NOT NULL
+    price DECIMAL(12,2) NOT NULL,
+    start_at DATETIME NULL,
+    end_at DATETIME NULL,
+    resource_id VARCHAR(60) NULL,
+    resource_name VARCHAR(150) NULL
 );
 
 CREATE TABLE booking_blocks (

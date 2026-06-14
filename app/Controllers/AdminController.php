@@ -32,10 +32,7 @@ final class AdminController extends BaseController
     {
         $this->authorize('calendar.view');
         $date = (string) ($_GET['date'] ?? date('Y-m-d'));
-        $this->internalPage('pages/admin/calendar', 'Kalender', [
-            'calendar' => $this->repo()->calendar($date),
-            'services' => $this->repo()->getServices(),
-        ]);
+        $this->internalPage('pages/admin/calendar', 'Kalender', $this->repo()->calendarPagePayload($date));
     }
 
     public function createInternalBooking(): void
@@ -110,6 +107,8 @@ final class AdminController extends BaseController
             'groups' => $this->repo()->getServiceGroups(),
             'services' => $this->repo()->getServices(),
             'packages' => $this->repo()->getPackages(),
+            'staff' => $this->repo()->getStaff(),
+            'products' => $this->repo()->getProducts(),
         ]);
     }
 
@@ -124,8 +123,10 @@ final class AdminController extends BaseController
         $this->authorize('vouchers.view');
         $this->internalPage('pages/admin/vouchers', 'Voucher', [
             'vouchers' => $this->repo()->getVouchers(),
+            'discounts' => $this->repo()->getVoucherDiscounts(),
             'classes' => $this->repo()->getClasses(),
             'services' => $this->repo()->getServices(),
+            'locations' => $this->repo()->getLocations(),
         ]);
     }
 
@@ -149,6 +150,23 @@ final class AdminController extends BaseController
     {
         $this->authorize('settings.view');
         $this->internalPage('pages/admin/settings', 'Settings', $this->repo()->settingsPayload());
+    }
+
+    public function updateBusinessProfile(): void
+    {
+        $this->authorize('settings.view');
+        verify_csrf();
+
+        $result = $this->repo()->updateBusinessProfile([
+            'business_name' => (string) ($_POST['business_name'] ?? ''),
+            'address' => (string) ($_POST['address'] ?? ''),
+            'notification_channel' => (string) ($_POST['notification_channel'] ?? ''),
+            'timezone' => (string) ($_POST['timezone'] ?? ''),
+            'hours_schedule_json' => (string) ($_POST['hours_schedule_json'] ?? '[]'),
+        ], (string) ($this->internalUser()['name'] ?? 'Admin'));
+
+        flash($result['success'] ? 'success' : 'error', $result['message']);
+        $this->redirect('/settings');
     }
 
     public function updateStaffPermissions(): void

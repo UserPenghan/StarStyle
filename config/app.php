@@ -6,22 +6,22 @@ return [
     'name' => 'StarStyle',
     'tagline' => 'Salon Management System',
     'description' => 'Platform reservasi dan operasional salon modern dengan dashboard, POS, CRM, inventory, analytics, serta kontrol akses staf.',
-    'timezone' => 'Asia/Bangkok',
+    'timezone' => getenv('APP_TIMEZONE') ?: 'Asia/Bangkok',
     // Switch data source:
     // - demo: in-memory seeded data + session writes (default)
     // - db:   MySQL/MariaDB via PDO (XAMPP)
-    'data_source' => 'db',
+    'data_source' => getenv('APP_DATA_SOURCE') ?: 'db',
     'db' => [
-        'driver' => 'mysql',
-        'host' => '127.0.0.1',
-        'port' => 3306,
+        'driver' => getenv('DB_DRIVER') ?: 'mysql',
+        'host' => getenv('DB_HOST') ?: '127.0.0.1',
+        'port' => (int) (getenv('DB_PORT') ?: 3306),
         // NOTE: schema.sql uses "starstyle" as database name.
         // If you created a different db name in phpMyAdmin (eg: db_starstyle),
         // update this value to match.
-        'database' => 'starstyle',
-        'username' => 'root',
-        'password' => '',
-        'charset' => 'utf8mb4',
+        'database' => getenv('DB_DATABASE') ?: 'starstyle',
+        'username' => getenv('DB_USERNAME') ?: 'root',
+        'password' => getenv('DB_PASSWORD') ?: '',
+        'charset' => getenv('DB_CHARSET') ?: 'utf8mb4',
     ],
     'theme' => [
         'primary' => '#63b4ff',
@@ -31,12 +31,12 @@ return [
         'soft' => '#f5faff',
     ],
     'business' => [
-        'name' => 'StarStyle Salon',
-        'city' => 'Bangkok',
-        'hotline' => '+66 2 555 0101',
-        'email' => 'hello@starstyle.test',
-        'hours' => '09:00 - 20:00',
-        'address' => 'Silom Creative Avenue, Bangkok',
+        'name' => getenv('BUSINESS_NAME') ?: 'StarStyle Salon',
+        'city' => getenv('BUSINESS_CITY') ?: 'Bangkok',
+        'hotline' => getenv('BUSINESS_HOTLINE') ?: '+66 2 555 0101',
+        'email' => getenv('BUSINESS_EMAIL') ?: 'hello@starstyle.test',
+        'hours' => getenv('BUSINESS_HOURS') ?: '09:00 - 20:00',
+        'address' => getenv('BUSINESS_ADDRESS') ?: 'Silom Creative Avenue, Bangkok',
     ],
     'internal_nav' => [
         ['label' => 'Beranda', 'icon' => 'house-door', 'path' => '/dashboard', 'permission' => 'dashboard.view'],

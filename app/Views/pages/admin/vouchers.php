@@ -1,112 +1,22 @@
 <?php
-$voucherRows = [
-    [
-        'type_code' => 'G',
-        'type_label' => 'Gift Type',
-        'name' => 'voucher gift',
-        'value' => 'Rp 30.000,00',
-        'editor_value' => '30000',
-        'duration' => '1 Bulan',
-        'expiry_label' => 'After 1 Month',
-        'location' => 'Semua Lokasi',
-        'status' => 'Active',
-        'type_key' => 'gift',
-        'message' => 'Thank you!',
-        'active' => true,
-        'search' => 'gift type voucher gift rp 30.000,00 1 bulan semua lokasi active',
-    ],
-    [
-        'type_code' => 'S',
-        'type_label' => 'Service Type',
-        'name' => 'Potong Rambut Promo',
-        'value' => 'Potong rambut pria -',
-        'editor_value' => '0',
-        'duration' => '1 Bulan',
-        'expiry_label' => 'After 1 Month',
-        'location' => 'Semua Lokasi',
-        'status' => 'Active',
-        'type_key' => 'service',
-        'service_name' => 'Signature Haircut',
-        'message' => 'Thank you!',
-        'active' => true,
-        'search' => 'service type potong rambut promo potong rambut pria 1 bulan semua lokasi active',
-    ],
-    [
-        'type_code' => 'S',
-        'type_label' => 'Service Type',
-        'name' => 'Diskon Ulang Tahun',
-        'value' => 'Potong rambut pria -',
-        'editor_value' => '0',
-        'duration' => '1 Bulan',
-        'expiry_label' => 'After 1 Month',
-        'location' => 'Semua Lokasi',
-        'status' => 'Active',
-        'type_key' => 'service',
-        'service_name' => 'Signature Haircut',
-        'message' => 'Thank you!',
-        'active' => true,
-        'search' => 'service type diskon ulang tahun potong rambut pria 1 bulan semua lokasi active',
-    ],
-    [
-        'type_code' => 'G',
-        'type_label' => 'Gift Type',
-        'name' => 'Diskon Juni',
-        'value' => 'Rp 20.000,00',
-        'editor_value' => '20000',
-        'duration' => '1 Bulan',
-        'expiry_label' => 'After 1 Month',
-        'location' => 'Semua Lokasi',
-        'status' => 'Active',
-        'type_key' => 'gift',
-        'message' => 'Thank you!',
-        'active' => true,
-        'search' => 'gift type diskon juni rp 20.000,00 1 bulan semua lokasi active',
-    ],
-    [
-        'type_code' => 'S',
-        'type_label' => 'Service Type',
-        'name' => 'Diskon Mei',
-        'value' => 'Hair spa -, Cat rambut ful...',
-        'editor_value' => '0',
-        'duration' => '1 Minggu',
-        'expiry_label' => 'After 1 Week',
-        'location' => 'Semua Lokasi',
-        'status' => 'Active',
-        'type_key' => 'service',
-        'service_name' => 'Hair spa -, Cat rambut ful...',
-        'message' => 'Thank you!',
-        'active' => true,
-        'search' => 'service type diskon mei hair spa cat rambut 1 minggu semua lokasi active',
-    ],
-];
-$discountRows = [
-    [
-        'id' => 1,
-        'name' => 'Diskon 20%',
-        'mode' => 'percent',
-        'amount_label' => '20.00 %',
-        'amount_value' => '20',
-        'max_discount' => 'Rp 0,00',
-        'applies_to' => ['Penjualan Service', 'Penjualan Kelas', 'Penjualan Produk', 'Penjualan voucher', 'Total Penjualan'],
-    ],
-    [
-        'id' => 2,
-        'name' => 'Diskon Mei Happy',
-        'mode' => 'amount',
-        'amount_label' => 'Rp 20.000,00',
-        'amount_value' => '20000',
-        'max_discount' => '',
-        'applies_to' => ['Penjualan Service', 'Penjualan Kelas', 'Penjualan Produk', 'Penjualan voucher', 'Total Penjualan'],
-    ],
-];
+$voucherRows = $vouchers ?? [];
+$discountRows = $discounts ?? [];
 $discountScopes = ['Penjualan Service', 'Penjualan Kelas', 'Penjualan Produk', 'Penjualan voucher', 'Total Penjualan'];
-$voucherServiceOptions = [
-    ['name' => 'Cat rambut full ()', 'price' => 'Rp 300.000,00', 'duration' => '3h'],
-    ['name' => 'Hair spa ()', 'price' => 'Rp 120.000,00', 'duration' => '2h'],
-    ['name' => 'Creambath ()', 'price' => 'Rp 100.000,00', 'duration' => '2h'],
-    ['name' => 'Potong rambut Wanita ()', 'price' => 'Rp 50.000,00', 'duration' => '1h'],
-    ['name' => 'Potong rambut pria ()', 'price' => 'Rp 50.000,00', 'duration' => '1h'],
-];
+$locationChoices = ['Semua Lokasi'];
+foreach (($locations ?? []) as $location) {
+    $name = trim((string) ($location['name'] ?? ''));
+    if ($name !== '' && !in_array($name, $locationChoices, true)) {
+        $locationChoices[] = $name;
+    }
+}
+$voucherServiceOptions = array_map(static function (array $service): array {
+    return [
+        'id' => (int) ($service['id'] ?? 0),
+        'name' => (string) ($service['name'] ?? 'Layanan'),
+        'price' => 'Rp ' . number_format((float) ($service['price'] ?? 0), 2, ',', '.'),
+        'duration' => ((int) ($service['duration'] ?? 0) > 0 ? (int) ($service['duration'] ?? 0) . 'm' : '-'),
+    ];
+}, $services ?? []);
 ?>
 
 <section class="vouchers-shell js-vouchers-shell">
@@ -119,11 +29,18 @@ $voucherServiceOptions = [
         <section class="vouchers-panel is-active js-vouchers-panel" data-vouchers-panel="voucher">
             <div class="vouchers-toolbar vouchers-toolbar--compact">
                 <div class="vouchers-toolbar__group">
-                    <button class="dashboard-filter dashboard-filter--shop" type="button">
-                        <i class="bi bi-shop"></i>
-                        <span>Star Salon</span>
-                        <i class="bi bi-chevron-down"></i>
-                    </button>
+                    <div class="dropdown">
+                        <button class="dashboard-filter dashboard-filter--shop" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-shop"></i>
+                            <span class="js-vouchers-shop-label">Star Salon</span>
+                            <i class="bi bi-chevron-down"></i>
+                        </button>
+                        <div class="dropdown-menu analytics-filter-menu">
+                            <?php foreach ($locationChoices as $index => $locationOption): ?>
+                                <button class="dropdown-item analytics-filter-option<?= $index === 0 ? ' is-active' : '' ?> js-vouchers-shop-option" type="button" data-vouchers-shop-option="<?= e($locationOption) ?>"><?= e($locationOption) ?></button>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
                     <div class="vouchers-filter-chips">
                         <button class="vouchers-filter-chip is-active js-voucher-type-filter" type="button" data-voucher-type="all">Semua</button>
                         <button class="vouchers-filter-chip js-voucher-type-filter" type="button" data-voucher-type="gift">G</button>
@@ -152,20 +69,26 @@ $voucherServiceOptions = [
                         <?php foreach ($voucherRows as $voucher): ?>
                             <tr
                                 class="js-voucher-row"
+                                data-voucher-id="<?= e((string) ($voucher['id'] ?? 0)) ?>"
                                 data-voucher-type="<?= e($voucher['type_key']) ?>"
                                 data-voucher-type-code="<?= e($voucher['type_code']) ?>"
                                 data-voucher-type-label="<?= e($voucher['type_label']) ?>"
                                 data-voucher-name="<?= e($voucher['name']) ?>"
                                 data-voucher-value="<?= e($voucher['value']) ?>"
                                 data-voucher-editor-value="<?= e($voucher['editor_value']) ?>"
+                                data-voucher-price-value="<?= e((string) ($voucher['price_value'] ?? $voucher['editor_value'])) ?>"
                                 data-search="<?= e($voucher['search']) ?>"
                                 data-voucher-duration="<?= e($voucher['duration']) ?>"
                                 data-voucher-expiry-label="<?= e($voucher['expiry_label']) ?>"
+                                data-voucher-expiry-value="<?= e((string) ($voucher['expiry_value'] ?? $voucher['expiry_label'])) ?>"
                                 data-voucher-location="<?= e($voucher['location']) ?>"
                                 data-voucher-status="<?= e($voucher['status']) ?>"
                                 data-voucher-service-name="<?= e($voucher['service_name'] ?? '') ?>"
                                 data-voucher-message="<?= e($voucher['message'] ?? 'Thank you!') ?>"
                                 data-voucher-active="<?= $voucher['active'] ? '1' : '0' ?>"
+                                data-voucher-services="<?= e((string) ($voucher['services_json'] ?? '[]')) ?>"
+                                data-voucher-combine-quantity="<?= !empty($voucher['combine_quantity']) ? '1' : '0' ?>"
+                                data-voucher-max-quantity="<?= e((string) ($voucher['max_quantity'] ?? 1)) ?>"
                             >
                                 <td>
                                     <div class="voucher-table__type">
@@ -182,17 +105,18 @@ $voucherServiceOptions = [
                         <?php endforeach; ?>
                     </tbody>
                 </table>
-                <div class="inventory-table__footer">
-                    <span>Total <?= count($voucherRows) ?></span>
-                    <div class="inventory-table__footer-controls">
-                        <button class="inventory-table__page-size" type="button">20/page <i class="bi bi-chevron-down"></i></button>
-                        <button class="inventory-table__pager" type="button"><i class="bi bi-chevron-left"></i></button>
-                        <button class="inventory-table__page is-active" type="button">1</button>
-                        <button class="inventory-table__pager" type="button"><i class="bi bi-chevron-right"></i></button>
-                        <span>Go to</span>
-                        <button class="inventory-table__goto" type="button">1</button>
-                        <button class="inventory-table__collapse" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services" data-vouchers-pagination="voucher">
+                    <div class="sales-pagination__meta">Total <span class="js-vouchers-total"><?= e((string) count($voucherRows)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
                     </div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-pagination-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
         </section>
@@ -200,11 +124,18 @@ $voucherServiceOptions = [
         <section class="vouchers-panel js-vouchers-panel" data-vouchers-panel="discount" hidden>
             <div class="vouchers-toolbar vouchers-toolbar--compact">
                 <div class="vouchers-toolbar__group">
-                    <button class="dashboard-filter dashboard-filter--shop" type="button">
-                        <i class="bi bi-shop"></i>
-                        <span>Star Salon</span>
-                        <i class="bi bi-chevron-down"></i>
-                    </button>
+                    <div class="dropdown">
+                        <button class="dashboard-filter dashboard-filter--shop" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="bi bi-shop"></i>
+                            <span class="js-vouchers-shop-label">Star Salon</span>
+                            <i class="bi bi-chevron-down"></i>
+                        </button>
+                        <div class="dropdown-menu analytics-filter-menu">
+                            <?php foreach ($locationChoices as $index => $locationOption): ?>
+                                <button class="dropdown-item analytics-filter-option<?= $index === 0 ? ' is-active' : '' ?> js-vouchers-shop-option" type="button" data-vouchers-shop-option="<?= e($locationOption) ?>"><?= e($locationOption) ?></button>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
                     <label class="sales-search-field vouchers-search">
                         <input class="js-vouchers-discount-search" type="search" placeholder="Ketik kata kunci" autocomplete="off">
                         <i class="bi bi-search"></i>
@@ -223,6 +154,7 @@ $voucherServiceOptions = [
                             data-discount-mode="<?= e($discount['mode']) ?>"
                             data-discount-amount="<?= e($discount['amount_value']) ?>"
                             data-discount-max="<?= e($discount['max_discount']) ?>"
+                            data-discount-max-value="<?= e((string) ($discount['max_discount_value'] ?? '0')) ?>"
                             data-discount-scopes="<?= e(json_encode($discount['applies_to'], JSON_UNESCAPED_UNICODE)) ?>"
                             data-search="<?= e(strtolower($discount['name'] . ' ' . $discount['amount_label'])) ?>"
                         >
@@ -387,6 +319,7 @@ $voucherServiceOptions = [
                 </div>
             </div>
             <div class="customer-modal__footer">
+                <button type="button" class="customer-footer-btn js-voucher-service-delete" hidden>Hapus</button>
                 <button type="button" class="customer-footer-btn" data-bs-dismiss="modal">Batal</button>
                 <button type="button" class="customer-footer-btn customer-footer-btn--disabled js-voucher-service-save">Simpan</button>
             </div>
@@ -404,6 +337,7 @@ $voucherServiceOptions = [
                         <?php foreach ($voucherServiceOptions as $option): ?>
                             <div
                                 class="voucher-service-option js-voucher-service-option"
+                                data-service-id="<?= e((string) $option['id']) ?>"
                                 data-service-name="<?= e($option['name']) ?>"
                                 data-service-price="<?= e($option['price']) ?>"
                                 data-service-duration="<?= e($option['duration']) ?>"
@@ -439,7 +373,7 @@ $voucherServiceOptions = [
                         <i class="bi bi-search"></i>
                     </label>
                     <div class="voucher-location-panel__list js-voucher-location-options">
-                        <?php foreach (['Semua Lokasi', 'Star Salon', 'Cabang Utama'] as $locationOption): ?>
+                        <?php foreach ($locationChoices as $locationOption): ?>
                             <button class="voucher-location-option js-voucher-location-option" type="button" data-location-name="<?= e($locationOption) ?>">
                                 <span><?= e($locationOption) ?></span>
                                 <i class="bi bi-check-lg"></i>
@@ -592,6 +526,7 @@ $voucherServiceOptions = [
                 </div>
             </div>
             <div class="customer-modal__footer">
+                <button type="button" class="customer-footer-btn js-voucher-gift-delete" hidden>Hapus</button>
                 <button type="button" class="customer-footer-btn" data-bs-dismiss="modal">Batal</button>
                 <button type="button" class="customer-footer-btn staff-save-btn js-voucher-gift-save">Simpan</button>
             </div>
@@ -606,7 +541,7 @@ $voucherServiceOptions = [
                         <i class="bi bi-search"></i>
                     </label>
                     <div class="voucher-location-panel__list js-voucher-gift-location-options">
-                        <?php foreach (['Semua Lokasi', 'Star Salon', 'Cabang Utama'] as $locationOption): ?>
+                        <?php foreach ($locationChoices as $locationOption): ?>
                             <button class="voucher-location-option js-voucher-gift-location-option" type="button" data-location-name="<?= e($locationOption) ?>">
                                 <span><?= e($locationOption) ?></span>
                                 <i class="bi bi-check-lg"></i>

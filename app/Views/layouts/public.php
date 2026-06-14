@@ -12,7 +12,13 @@
     <link href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" rel="stylesheet">
     <link href="<?= e(asset('css/app.css')) ?>" rel="stylesheet">
 </head>
-<body class="public-shell">
+<?php
+$currentPage = (string) ($page ?? '');
+$hidePublicHeader = in_array($currentPage, ['/booking', '/booking/services', '/booking/time', '/booking/summary', '/booking/confirmation', '/booking/payment', '/booking/payment/qris', '/booking/payment/proof', '/booking/payment/pending', '/booking/payment/success'], true);
+$hidePublicAuthButtons = in_array($currentPage, ['/customer/account'], true);
+?>
+<body class="public-shell<?= $hidePublicHeader ? ' public-shell--booking' : '' ?>">
+<?php if (!$hidePublicHeader): ?>
 <header class="public-header">
     <div class="container">
         <nav class="navbar navbar-expand-lg py-3">
@@ -24,12 +30,15 @@
                 <?php foreach (($publicNav ?? []) as $item): ?>
                     <a class="text-white text-decoration-none small" href="<?= e(url($item['path'])) ?>"><?= e($item['label']) ?></a>
                 <?php endforeach; ?>
-                <a class="btn btn-light rounded-pill px-4" href="<?= e(url('/customer/login')) ?>">Customer Login</a>
-                <a class="btn btn-dark rounded-pill px-4" href="<?= e(url('/login')) ?>">Admin</a>
+                <?php if (!$hidePublicAuthButtons): ?>
+                    <a class="btn btn-light rounded-pill px-4" href="<?= e(url('/customer/login')) ?>">Customer Login</a>
+                    <a class="btn btn-dark rounded-pill px-4" href="<?= e(url('/login')) ?>">Admin</a>
+                <?php endif; ?>
             </div>
         </nav>
     </div>
 </header>
+<?php endif; ?>
 <main>
     <?php if (!empty($success) || !empty($error)): ?>
         <div class="container pt-4">

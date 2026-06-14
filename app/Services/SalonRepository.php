@@ -20,6 +20,11 @@ final class SalonRepository
     private bool $inventorySeedEnsured = false;
     private bool $staffScheduleSchemaEnsured = false;
     private bool $staffScheduleSeedEnsured = false;
+    private bool $customerSchemaEnsured = false;
+    private bool $staffProfileSchemaEnsured = false;
+    private bool $serviceCatalogSchemaEnsured = false;
+    private bool $voucherCatalogSchemaEnsured = false;
+    private bool $bookingSchemaEnsured = false;
 
     public function __construct(
         private readonly array $config,
@@ -350,6 +355,168 @@ final class SalonRepository
         return $this->columnExistsCache[$cacheKey] = $row !== null;
     }
 
+    private function ensureBookingSchema(): void
+    {
+        if (!$this->usingDb() || $this->bookingSchemaEnsured) {
+            return;
+        }
+
+        if ($this->tableExists('bookings')) {
+            $bookingColumns = [
+                'updated_at' => 'ADD COLUMN updated_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP AFTER created_at',
+                'cancel_reason' => 'ADD COLUMN cancel_reason VARCHAR(255) NULL DEFAULT NULL AFTER notes',
+                'products_json' => 'ADD COLUMN products_json LONGTEXT NULL AFTER cancel_reason',
+                'payment_method' => "ADD COLUMN payment_method VARCHAR(40) NULL DEFAULT NULL AFTER products_json",
+                'payment_proof_path' => 'ADD COLUMN payment_proof_path LONGTEXT NULL AFTER payment_method',
+                'payment_review_status' => "ADD COLUMN payment_review_status VARCHAR(40) NOT NULL DEFAULT 'waiting_admin' AFTER payment_proof_path",
+            ];
+            foreach ($bookingColumns as $column => $ddl) {
+                if (!$this->columnExists('bookings', $column)) {
+                    $this->dbExecute("ALTER TABLE bookings {$ddl}");
+                }
+            }
+        }
+
+        if ($this->tableExists('booking_items')) {
+            $itemColumns = [
+                'staff_id' => 'ADD COLUMN staff_id BIGINT UNSIGNED NULL DEFAULT NULL AFTER service_id',
+                'start_at' => 'ADD COLUMN start_at DATETIME NULL DEFAULT NULL AFTER price',
+                'end_at' => 'ADD COLUMN end_at DATETIME NULL DEFAULT NULL AFTER start_at',
+                'resource_id' => 'ADD COLUMN resource_id VARCHAR(60) NULL DEFAULT NULL AFTER end_at',
+                'resource_name' => 'ADD COLUMN resource_name VARCHAR(150) NULL DEFAULT NULL AFTER resource_id',
+            ];
+            foreach ($itemColumns as $column => $ddl) {
+                if (!$this->columnExists('booking_items', $column)) {
+                    $this->dbExecute("ALTER TABLE booking_items {$ddl}");
+                }
+            }
+        }
+
+        $this->tableExistsCache = [];
+        $this->columnExistsCache = [];
+        $this->bookingSchemaEnsured = true;
+    }
+
+    private function ensureBusinessSettingsSchema(): void
+    {
+        if (!$this->usingDb() || !$this->tableExists('business_settings')) {
+            return;
+        }
+
+        $columns = [
+            'timezone' => "ADD COLUMN timezone VARCHAR(80) NOT NULL DEFAULT 'Asia/Bangkok' AFTER notification_channel",
+            'hours_schedule_json' => 'ADD COLUMN hours_schedule_json LONGTEXT NULL AFTER timezone',
+        ];
+
+        foreach ($columns as $column => $ddl) {
+            if (!$this->columnExists('business_settings', $column)) {
+                $this->dbExecute("ALTER TABLE business_settings {$ddl}");
+            }
+        }
+
+        $this->tableExistsCache = [];
+        $this->columnExistsCache = [];
+    }
+
+    private function normalizeStoredBookingProducts(mixed $rawValue): array
+    {
+        $items = is_string($rawValue) ? json_decode($rawValue, true) : $rawValue;
+        if (!is_array($items)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $id = trim((string) ($item['id'] ?? ''));
+            $name = trim((string) ($item['name'] ?? ''));
+            if ($id === '' || $name === '') {
+                continue;
+            }
+
+            $normalized[] = [
+                'id' => $id,
+                'name' => $name,
+                'variant' => trim((string) ($item['variant'] ?? '')),
+                'price' => (float) ($item['price'] ?? 0),
+                'stock' => (int) ($item['stock'] ?? 0),
+                'qty' => max(1, (int) ($item['qty'] ?? 1)),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    private function bookingReferenceLookup(string $reference): ?array
+    {
+        if ($reference === '') {
+            return null;
+        }
+
+        if ($this->usingDb()) {
+            $this->ensureBookingSchema();
+
+            return $this->dbOne(
+                "SELECT id, location_id, customer_id, staff_id, reference, channel, start_at, end_at, status, notes, cancel_reason, products_json, payment_method, payment_proof_path, payment_review_status, created_at, updated_at
+                 FROM bookings
+                 WHERE reference = :reference
+                 LIMIT 1",
+                ['reference' => $reference]
+            );
+        }
+
+        foreach ($_SESSION['starstyle']['bookings'] as $booking) {
+            if ((string) ($booking['reference'] ?? '') === $reference) {
+                return $booking;
+            }
+        }
+
+        return null;
+    }
+
+    private function bookingByReference(string $reference): ?array
+    {
+        if ($reference === '') {
+            return null;
+        }
+
+        foreach ($this->getBookings() as $booking) {
+            if ((string) ($booking['reference'] ?? '') === $reference) {
+                return $booking;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeBookingPaymentReviewStatus(string $status): string
+    {
+        $normalized = strtolower(trim(str_replace(' ', '_', $status)));
+        $allowedStatuses = ['waiting_admin', 'complete'];
+
+        return in_array($normalized, $allowedStatuses, true) ? $normalized : 'waiting_admin';
+    }
+
+    private function paymentProofDataUrl(string $path): string
+    {
+        $path = trim($path);
+        if ($path === '' || !is_file($path) || !is_readable($path)) {
+            return '';
+        }
+
+        $contents = @file_get_contents($path);
+        if ($contents === false || $contents === '') {
+            return '';
+        }
+
+        $mimeType = mime_content_type($path) ?: 'image/jpeg';
+
+        return 'data:' . $mimeType . ';base64,' . base64_encode($contents);
+    }
+
     public function findUserByEmail(string $email, string $portal): ?array
     {
         if ($this->usingDb()) {
@@ -486,18 +653,36 @@ final class SalonRepository
     public function getServices(): array
     {
         if ($this->usingDb()) {
+            $this->ensureServiceCatalogSchema();
             $services = $this->dbAll(
-                "SELECT s.id, s.group_id, s.name, s.duration_minutes, s.base_price, s.status, s.description
+                "SELECT s.id, s.group_id, s.name, s.duration_minutes, s.base_price, s.status, s.description,
+                        s.audience_json, s.image_data_url, s.online_bookable, s.commission_enabled,
+                        s.at_customer_location, s.extra_time_type, s.extra_time_minutes
                  FROM services s
                  WHERE s.deleted_at IS NULL
                  ORDER BY s.id"
             );
-            $variantRows = $this->dbAll("SELECT service_id, variant_name FROM service_variants ORDER BY id");
+            $variantRows = $this->dbAll(
+                "SELECT service_id, variant_name, duration_minutes, price, special_price, location_pricing_json,
+                        cost_price, cost_products_json, availability_json
+                 FROM service_variants
+                 ORDER BY id"
+            );
             $skillRows = $this->dbAll("SELECT staff_id, service_id FROM staff_skills ORDER BY staff_id, service_id");
 
             $variantsByService = [];
             foreach ($variantRows as $row) {
-                $variantsByService[(int) $row['service_id']][] = (string) $row['variant_name'];
+                $serviceId = (int) $row['service_id'];
+                $variantsByService[$serviceId][] = [
+                    'variant_name' => (string) ($row['variant_name'] ?? ''),
+                    'duration_minutes' => (int) ($row['duration_minutes'] ?? 0),
+                    'price' => (float) ($row['price'] ?? 0),
+                    'special_price' => (float) ($row['special_price'] ?? 0),
+                    'location_pricing' => json_decode((string) ($row['location_pricing_json'] ?? 'null'), true),
+                    'cost_price' => (float) ($row['cost_price'] ?? 0),
+                    'cost_products' => json_decode((string) ($row['cost_products_json'] ?? '[]'), true),
+                    'availability' => json_decode((string) ($row['availability_json'] ?? 'null'), true),
+                ];
             }
 
             $staffByService = [];
@@ -507,6 +692,19 @@ final class SalonRepository
 
             return array_map(static function (array $service) use ($variantsByService, $staffByService): array {
                 $serviceId = (int) $service['id'];
+                $audience = json_decode((string) ($service['audience_json'] ?? '[]'), true);
+                $variantDetails = array_map(static function (array $variant): array {
+                    return [
+                        'variant_name' => (string) ($variant['variant_name'] ?? ''),
+                        'duration_minutes' => (int) ($variant['duration_minutes'] ?? 0),
+                        'price' => (float) ($variant['price'] ?? 0),
+                        'special_price' => (float) ($variant['special_price'] ?? 0),
+                        'location_pricing' => is_array($variant['location_pricing'] ?? null) ? $variant['location_pricing'] : null,
+                        'cost_price' => (float) ($variant['cost_price'] ?? 0),
+                        'cost_products' => is_array($variant['cost_products'] ?? null) ? $variant['cost_products'] : [],
+                        'availability' => is_array($variant['availability'] ?? null) ? $variant['availability'] : null,
+                    ];
+                }, $variantsByService[$serviceId] ?? []);
 
                 return [
                     'id' => $serviceId,
@@ -514,10 +712,18 @@ final class SalonRepository
                     'name' => (string) $service['name'],
                     'duration' => (int) $service['duration_minutes'],
                     'price' => (float) $service['base_price'],
-                    'variants' => $variantsByService[$serviceId] ?? [],
+                    'variants' => array_values(array_filter(array_map(static fn (array $variant): string => (string) ($variant['variant_name'] ?? ''), $variantDetails))),
+                    'variant_details' => $variantDetails,
                     'staff_ids' => $staffByService[$serviceId] ?? [],
                     'status' => (string) $service['status'],
                     'description' => (string) ($service['description'] ?? ''),
+                    'audience' => is_array($audience) ? array_values($audience) : ['Women', 'Men'],
+                    'image_data_url' => (string) ($service['image_data_url'] ?? ''),
+                    'online_bookable' => (bool) ($service['online_bookable'] ?? true),
+                    'commission_enabled' => (bool) ($service['commission_enabled'] ?? false),
+                    'at_customer_location' => (bool) ($service['at_customer_location'] ?? false),
+                    'extra_time_type' => (string) ($service['extra_time_type'] ?? 'none'),
+                    'extra_time_minutes' => (int) ($service['extra_time_minutes'] ?? 0),
                 ];
             }, $services);
         }
@@ -528,9 +734,18 @@ final class SalonRepository
     public function getServiceGroups(): array
     {
         if ($this->usingDb()) {
-            $stmt = $this->pdo()->query("SELECT id, name, description FROM service_groups ORDER BY id");
+            $this->ensureServiceCatalogSchema();
+            $rows = $this->dbAll("SELECT id, name, description, color, image_data_url FROM service_groups ORDER BY id");
 
-            return $stmt->fetchAll();
+            return array_map(static function (array $group): array {
+                return [
+                    'id' => (int) $group['id'],
+                    'name' => (string) $group['name'],
+                    'description' => (string) ($group['description'] ?? ''),
+                    'color' => (string) ($group['color'] ?? '#76b6e8'),
+                    'image_data_url' => (string) ($group['image_data_url'] ?? ''),
+                ];
+            }, $rows);
         }
 
         return $this->baseData['service_groups'];
@@ -539,7 +754,12 @@ final class SalonRepository
     public function getPackages(): array
     {
         if ($this->usingDb()) {
-            $packages = $this->dbAll("SELECT id, name, package_price, description FROM service_packages ORDER BY id");
+            $this->ensureServiceCatalogSchema();
+            $packages = $this->dbAll(
+                "SELECT id, group_id, name, package_price, description, pricing_mode, discount_value, audience, image_data_url, items_json
+                 FROM service_packages
+                 ORDER BY id"
+            );
             $itemRows = $this->dbAll(
                 "SELECT spi.package_id, s.name
                  FROM service_package_items spi
@@ -552,12 +772,31 @@ final class SalonRepository
             }
 
             return array_map(static function (array $package) use ($itemsByPackage): array {
+                $decodedItems = json_decode((string) ($package['items_json'] ?? '[]'), true);
+                $itemsDetail = is_array($decodedItems) ? $decodedItems : [];
+                $items = $itemsDetail !== []
+                    ? array_map(static function (array $item): string {
+                        $name = (string) ($item['name'] ?? '');
+                        $qty = max(1, (int) ($item['qty'] ?? 1));
+
+                        return ($item['type'] ?? 'service') === 'product' && $qty > 1
+                            ? $name . ' x' . $qty
+                            : $name;
+                    }, $itemsDetail)
+                    : ($itemsByPackage[(int) $package['id']] ?? []);
+
                 return [
                     'id' => (int) $package['id'],
+                    'group_id' => $package['group_id'] !== null ? (int) $package['group_id'] : null,
                     'name' => (string) $package['name'],
-                    'items' => $itemsByPackage[(int) $package['id']] ?? [],
+                    'items' => $items,
+                    'items_detail' => $itemsDetail,
                     'price' => (float) $package['package_price'],
                     'description' => (string) ($package['description'] ?? ''),
+                    'pricing_mode' => (string) ($package['pricing_mode'] ?? 'service'),
+                    'discount_value' => (float) ($package['discount_value'] ?? 0),
+                    'audience' => (string) ($package['audience'] ?? 'all'),
+                    'image_data_url' => (string) ($package['image_data_url'] ?? ''),
                 ];
             }, $packages);
         }
@@ -568,41 +807,63 @@ final class SalonRepository
     public function getStaff(): array
     {
         if ($this->usingDb()) {
+            $this->ensureStaffProfileSchema();
             $staffRows = $this->dbAll(
                 "SELECT s.id, s.user_id, s.location_id, s.name, s.email, s.phone, s.role_title, s.status,
-                        s.commission_type, s.commission_value, s.rating, l.name AS location_name
+                        s.commission_type, s.commission_value, s.rating, l.name AS location_name,
+                        s.gender, s.booking_enabled, s.agenda_color, s.started_working_on, s.ended_working_on,
+                        s.public_title, s.notes, s.instagram_handle, s.photo_data_url, s.commission_rules,
+                        s.attendance_pose, s.attendance_uploaded_pose
                  FROM staff s
                  LEFT JOIN locations l ON l.id = s.location_id
                  WHERE s.deleted_at IS NULL
                  ORDER BY s.id"
             );
             $skillRows = $this->dbAll(
-                "SELECT ss.staff_id, sv.name AS service_name
+                "SELECT ss.staff_id, ss.service_id, sv.name AS service_name
                  FROM staff_skills ss
                  JOIN services sv ON sv.id = ss.service_id
                  ORDER BY ss.staff_id, sv.name"
             );
             $specialtiesByStaff = [];
+            $serviceIdsByStaff = [];
             foreach ($skillRows as $row) {
                 $specialtiesByStaff[(int) $row['staff_id']][] = (string) $row['service_name'];
+                $serviceIdsByStaff[(int) $row['staff_id']][] = (int) $row['service_id'];
             }
 
-            return array_map(static function (array $staff) use ($specialtiesByStaff): array {
+            return array_map(function (array $staff) use ($specialtiesByStaff, $serviceIdsByStaff): array {
                 $staffId = (int) $staff['id'];
+                $commissionRules = json_decode((string) ($staff['commission_rules'] ?? '[]'), true);
 
                 return [
                     'id' => $staffId,
                     'user_id' => $staff['user_id'] !== null ? (int) $staff['user_id'] : null,
+                    'location_id' => $staff['location_id'] !== null ? (int) $staff['location_id'] : null,
                     'name' => (string) $staff['name'],
                     'role' => (string) $staff['role_title'],
                     'email' => (string) ($staff['email'] ?? ''),
                     'phone' => (string) ($staff['phone'] ?? ''),
                     'status' => (string) $staff['status'],
                     'specialties' => $specialtiesByStaff[$staffId] ?? [],
+                    'service_ids' => $serviceIdsByStaff[$staffId] ?? [],
                     'commission_type' => (string) $staff['commission_type'],
                     'commission_value' => (float) $staff['commission_value'],
                     'rating' => (float) $staff['rating'],
                     'location_name' => (string) ($staff['location_name'] ?: 'Star Salon'),
+                    'gender' => (string) ($staff['gender'] ?? ''),
+                    'booking_enabled' => (bool) ($staff['booking_enabled'] ?? true),
+                    'agenda_color' => (string) ($staff['agenda_color'] ?? '#8cc9ff'),
+                    'started_working_on' => (string) ($staff['started_working_on'] ?? ''),
+                    'ended_working_on' => (string) ($staff['ended_working_on'] ?? ''),
+                    'public_title' => (string) ($staff['public_title'] ?? ''),
+                    'notes' => (string) ($staff['notes'] ?? ''),
+                    'instagram_handle' => (string) ($staff['instagram_handle'] ?? ''),
+                    'photo_data_url' => (string) ($staff['photo_data_url'] ?? ''),
+                    'commission_rules' => is_array($commissionRules) ? $commissionRules : [],
+                    'attendance_pose' => (string) ($staff['attendance_pose'] ?? 'Right Tilt'),
+                    'attendance_uploaded_pose' => (string) ($staff['attendance_uploaded_pose'] ?? ''),
+                    'permissions' => $this->staffPermissionsForList($staffId, (string) $staff['role_title']),
                 ];
             }, $staffRows);
         }
@@ -613,14 +874,25 @@ final class SalonRepository
     public function getCustomers(): array
     {
         if ($this->usingDb()) {
+            $this->ensureCustomerSchema();
+            $hasBirthdate = $this->columnExists('customers', 'birthdate');
+            $hasFamilyCard = $this->columnExists('customers', 'family_card_number');
+            $hasPassport = $this->columnExists('customers', 'passport_number');
+            $hasNotifyVia = $this->columnExists('customers', 'notify_via');
+            $hasMarketingOptIn = $this->columnExists('customers', 'marketing_opt_in');
             $rows = $this->dbAll(
-                "SELECT id, user_id, member_id, name, gender, phone, email, loyalty_points, last_visit_at, tags, status, notes, address
-                 FROM customers
-                 WHERE deleted_at IS NULL
-                 ORDER BY id"
+                'SELECT id, user_id, member_id, name, gender, phone, email, loyalty_points, last_visit_at, tags, status, notes, address'
+                . ($hasBirthdate ? ', birthdate' : '')
+                . ($hasFamilyCard ? ', family_card_number' : '')
+                . ($hasPassport ? ', passport_number' : '')
+                . ($hasNotifyVia ? ', notify_via' : '')
+                . ($hasMarketingOptIn ? ', marketing_opt_in' : '')
+                . ' FROM customers
+                   WHERE deleted_at IS NULL
+                   ORDER BY id'
             );
 
-            return array_map(static function (array $customer): array {
+            return array_map(static function (array $customer) use ($hasBirthdate, $hasFamilyCard, $hasPassport, $hasNotifyVia, $hasMarketingOptIn): array {
                 $tags = json_decode((string) ($customer['tags'] ?? '[]'), true);
 
                 return [
@@ -633,11 +905,15 @@ final class SalonRepository
                     'member_id' => (string) $customer['member_id'],
                     'loyalty_points' => (int) $customer['loyalty_points'],
                     'last_visit' => (string) ($customer['last_visit_at'] ?? ''),
-                    'birthdate' => '',
+                    'birthdate' => $hasBirthdate ? (string) ($customer['birthdate'] ?? '') : '',
                     'tags' => is_array($tags) ? array_values(array_map('strval', $tags)) : [],
                     'status' => (string) ($customer['status'] ?? 'Aktif'),
                     'notes' => (string) ($customer['notes'] ?? ''),
                     'address' => (string) ($customer['address'] ?? ''),
+                    'family_card_number' => $hasFamilyCard ? (string) ($customer['family_card_number'] ?? '') : '',
+                    'passport_number' => $hasPassport ? (string) ($customer['passport_number'] ?? '') : '',
+                    'notify_via' => $hasNotifyVia ? (string) ($customer['notify_via'] ?? 'off') : 'off',
+                    'marketing_opt_in' => $hasMarketingOptIn ? (bool) ($customer['marketing_opt_in'] ?? false) : false,
                 ];
             }, $rows);
         }
@@ -759,28 +1035,48 @@ final class SalonRepository
     public function getVouchers(): array
     {
         if ($this->usingDb()) {
+            $this->ensureVoucherCatalogSchema();
             $rows = $this->dbAll(
-                "SELECT id, voucher_type, name, code, value, usage_limit, used_count, expired_at, status
+                "SELECT id, voucher_type, name, code, value, price_value, usage_limit, used_count, expired_at, status,
+                        location_name, message_text, service_items_json, combine_quantity, max_quantity, expiry_mode, expiry_value
                  FROM vouchers
-                 ORDER BY id"
+                 WHERE deleted_at IS NULL
+                 ORDER BY id DESC"
             );
 
-            return array_map(static function (array $voucher): array {
-                return [
-                    'id' => (int) $voucher['id'],
-                    'name' => (string) $voucher['name'],
-                    'code' => (string) $voucher['code'],
-                    'type' => (string) $voucher['voucher_type'],
-                    'value' => (float) $voucher['value'],
-                    'expired_at' => (string) $voucher['expired_at'],
-                    'status' => (string) $voucher['status'],
-                    'usage_limit' => (int) $voucher['usage_limit'],
-                    'used' => (int) $voucher['used_count'],
-                ];
-            }, $rows);
+            return array_map(fn (array $voucher): array => $this->mapVoucherRecord($voucher), $rows);
         }
 
-        return $this->baseData['vouchers'];
+        return array_map(fn (array $voucher): array => $this->mapDemoVoucherRecord($voucher), $this->baseData['vouchers']);
+    }
+
+    public function getVoucherDiscounts(): array
+    {
+        if ($this->usingDb()) {
+            $this->ensureVoucherCatalogSchema();
+            $rows = $this->dbAll(
+                "SELECT id, name, mode, amount_value, max_discount_value, scopes_json, status
+                 FROM voucher_discounts
+                 WHERE deleted_at IS NULL
+                 ORDER BY id DESC"
+            );
+
+            return array_map(fn (array $discount): array => $this->mapVoucherDiscountRecord($discount), $rows);
+        }
+
+        return [
+            [
+                'id' => 1,
+                'name' => 'Diskon 20%',
+                'mode' => 'percent',
+                'amount_label' => '20.00 %',
+                'amount_value' => '20',
+                'max_discount' => 'Rp 0,00',
+                'max_discount_value' => '0',
+                'applies_to' => ['Penjualan Service', 'Penjualan Kelas', 'Penjualan Produk', 'Penjualan voucher', 'Total Penjualan'],
+                'search' => 'diskon 20 20',
+            ],
+        ];
     }
 
     public function getClasses(): array
@@ -823,19 +1119,29 @@ final class SalonRepository
     public function getReviews(): array
     {
         if ($this->usingDb()) {
+            if (!$this->tableExists('reviews') || !$this->tableExists('customers')) {
+                return [];
+            }
+
+            $joinUsers = $this->tableExists('users');
             $rows = $this->dbAll(
-                "SELECT c.name AS customer_name, r.rating, r.feedback, r.created_at
-                 FROM reviews r
+                "SELECT r.id, r.booking_id, c.name AS customer_name, c.email AS customer_email, r.rating, r.feedback, r.created_at"
+                . ($joinUsers ? ", u.email AS user_email" : ", NULL AS user_email")
+                . " FROM reviews r
                  JOIN customers c ON c.id = r.customer_id
+                " . ($joinUsers ? "LEFT JOIN users u ON u.id = c.user_id" : "") . "
                  ORDER BY r.created_at DESC"
             );
 
             return array_map(static function (array $review): array {
                 return [
+                    'id' => (int) $review['id'],
                     'customer' => (string) $review['customer_name'],
+                    'email' => (string) (($review['user_email'] ?? '') ?: ($review['customer_email'] ?? '')),
                     'rating' => (int) $review['rating'],
                     'feedback' => (string) ($review['feedback'] ?? ''),
                     'date' => (string) $review['created_at'],
+                    'agenda' => 'Review Booking #' . (int) ($review['booking_id'] ?? 0),
                 ];
             }, $rows);
         }
@@ -846,14 +1152,19 @@ final class SalonRepository
     public function getLogs(): array
     {
         if ($this->usingDb()) {
+            if (!$this->tableExists('activity_logs')) {
+                return [];
+            }
+
             $rows = $this->dbAll(
-                "SELECT actor_name, action_text, created_at
+                "SELECT id, actor_name, action_text, created_at
                  FROM activity_logs
                  ORDER BY created_at DESC"
             );
 
             return array_map(static function (array $log): array {
                 return [
+                    'id' => (int) $log['id'],
                     'time' => (string) $log['created_at'],
                     'actor' => (string) $log['actor_name'],
                     'action' => (string) $log['action_text'],
@@ -870,35 +1181,68 @@ final class SalonRepository
     public function getSettings(): array
     {
         if ($this->usingDb()) {
+            $this->ensureBusinessSettingsSchema();
             $row = $this->dbOne(
-                "SELECT business_name, business_hours, address, booking_advance_days, loyalty_ratio, currency, notification_channel
+                "SELECT business_name, business_hours, address, booking_advance_days, loyalty_ratio, currency, notification_channel, timezone, hours_schedule_json
                  FROM business_settings
                  ORDER BY id ASC
                  LIMIT 1"
             );
 
+            $schedule = $this->normalizeBusinessHoursSchedule(json_decode((string) ($row['hours_schedule_json'] ?? '[]'), true));
+
             return [
                 'business_name' => (string) ($row['business_name'] ?? $this->config['business']['name']),
-                'hours' => (string) ($row['business_hours'] ?? $this->config['business']['hours']),
+                'hours' => (string) ($row['business_hours'] ?? $this->summarizeBusinessHoursSchedule($schedule)),
                 'address' => (string) ($row['address'] ?? $this->config['business']['address']),
                 'booking_advance_days' => (int) ($row['booking_advance_days'] ?? 30),
                 'loyalty_ratio' => (int) ($row['loyalty_ratio'] ?? 10000),
                 'currency' => (string) ($row['currency'] ?? 'IDR'),
                 'notification_channel' => (string) ($row['notification_channel'] ?? ''),
+                'timezone' => (string) ($row['timezone'] ?? ($this->config['timezone'] ?? 'Asia/Bangkok')),
+                'hours_schedule' => $schedule,
             ];
         }
 
-        return $this->baseData['settings'];
+        $settings = $_SESSION['starstyle']['settings'] ?? $this->baseData['settings'];
+        $settings['timezone'] = (string) ($settings['timezone'] ?? ($this->config['timezone'] ?? 'Asia/Bangkok'));
+        $settings['hours_schedule'] = $this->normalizeBusinessHoursSchedule($settings['hours_schedule'] ?? null);
+        $settings['hours'] = (string) ($settings['hours'] ?? $this->summarizeBusinessHoursSchedule($settings['hours_schedule']));
+
+        return $settings;
     }
 
     public function getNotifications(): array
     {
         if ($this->usingDb()) {
-            return $this->dbAll(
-                "SELECT title, type, created_at
-                 FROM notifications
-                 ORDER BY created_at DESC"
+            if (!$this->tableExists('notifications')) {
+                return [];
+            }
+
+            $joinUsers = $this->tableExists('users');
+            $rows = $this->dbAll(
+                "SELECT n.id, n.title, n.type, n.is_read, n.created_at"
+                . ($joinUsers ? ", u.name AS recipient_name, u.email AS recipient_email" : ", NULL AS recipient_name, NULL AS recipient_email")
+                . " FROM notifications n
+                " . ($joinUsers ? "LEFT JOIN users u ON u.id = n.user_id" : "") . "
+                 ORDER BY n.created_at DESC"
             );
+
+            return array_map(static function (array $notification): array {
+                $type = (string) ($notification['type'] ?? 'notification');
+
+                return [
+                    'id' => (int) $notification['id'],
+                    'title' => (string) ($notification['title'] ?? ''),
+                    'type' => $type,
+                    'type_label' => ucfirst($type),
+                    'customer' => (string) (($notification['recipient_name'] ?? '') ?: 'Pelanggan'),
+                    'email' => (string) (($notification['recipient_email'] ?? '') ?: '-'),
+                    'agenda' => 'Notification',
+                    'is_read' => (bool) ($notification['is_read'] ?? false),
+                    'created_at' => (string) ($notification['created_at'] ?? ''),
+                ];
+            }, $rows);
         }
 
         return $this->baseData['notifications'];
@@ -968,13 +1312,14 @@ final class SalonRepository
     public function getBookings(): array
     {
         if ($this->usingDb()) {
+            $this->ensureBookingSchema();
             $bookingRows = $this->dbAll(
-                "SELECT id, location_id, customer_id, staff_id, reference, channel, start_at, end_at, status, notes
+                "SELECT id, location_id, customer_id, staff_id, reference, channel, start_at, end_at, status, notes, cancel_reason, products_json, payment_method, payment_proof_path, payment_review_status, created_at, updated_at
                  FROM bookings
                  ORDER BY start_at ASC"
             );
             $itemRows = $this->dbAll(
-                "SELECT booking_id, service_id, duration_minutes, price
+                "SELECT booking_id, service_id, staff_id, duration_minutes, price, start_at, end_at, resource_id, resource_name
                  FROM booking_items
                  ORDER BY booking_id, id"
             );
@@ -983,26 +1328,37 @@ final class SalonRepository
                 $bookingId = (int) $row['booking_id'];
                 $itemsByBooking[$bookingId][] = [
                     'service_id' => (int) $row['service_id'],
+                    'staff_id' => isset($row['staff_id']) ? (int) $row['staff_id'] : 0,
                     'duration' => (int) $row['duration_minutes'],
                     'price' => (float) $row['price'],
+                    'start_at' => (string) ($row['start_at'] ?? ''),
+                    'end_at' => (string) ($row['end_at'] ?? ''),
+                    'resource_id' => (string) ($row['resource_id'] ?? ''),
+                    'resource_name' => (string) ($row['resource_name'] ?? ''),
                 ];
             }
 
-            return array_map(static function (array $booking) use ($itemsByBooking): array {
+            return array_map(function (array $booking) use ($itemsByBooking): array {
                 $bookingId = (int) $booking['id'];
                 $cursor = new \DateTimeImmutable((string) $booking['start_at']);
                 $serviceItems = [];
                 $serviceIds = [];
                 foreach ($itemsByBooking[$bookingId] ?? [] as $item) {
-                    $serviceStart = $cursor;
-                    $serviceEnd = $serviceStart->modify('+' . $item['duration'] . ' minutes');
+                    $serviceStart = !empty($item['start_at'])
+                        ? new \DateTimeImmutable((string) $item['start_at'])
+                        : $cursor;
+                    $serviceEnd = !empty($item['end_at'])
+                        ? new \DateTimeImmutable((string) $item['end_at'])
+                        : $serviceStart->modify('+' . $item['duration'] . ' minutes');
                     $serviceItems[] = [
                         'service_id' => $item['service_id'],
-                        'staff_id' => (int) $booking['staff_id'],
+                        'staff_id' => (int) ($item['staff_id'] ?: $booking['staff_id']),
                         'start_at' => $serviceStart->format('Y-m-d H:i:s'),
                         'end_at' => $serviceEnd->format('Y-m-d H:i:s'),
                         'duration' => $item['duration'],
                         'price' => $item['price'],
+                        'resource_id' => (string) ($item['resource_id'] ?? ''),
+                        'resource_name' => (string) ($item['resource_name'] ?? ''),
                     ];
                     $serviceIds[] = $item['service_id'];
                     $cursor = $serviceEnd;
@@ -1020,6 +1376,13 @@ final class SalonRepository
                     'status' => (string) $booking['status'],
                     'channel' => (string) ($booking['channel'] ?? ''),
                     'notes' => (string) ($booking['notes'] ?? ''),
+                    'cancel_reason' => (string) ($booking['cancel_reason'] ?? ''),
+                    'products' => $this->normalizeStoredBookingProducts((string) ($booking['products_json'] ?? '[]')),
+                    'payment_method' => (string) ($booking['payment_method'] ?? ''),
+                    'payment_proof_path' => (string) ($booking['payment_proof_path'] ?? ''),
+                    'payment_proof_url' => $this->paymentProofDataUrl((string) ($booking['payment_proof_path'] ?? '')),
+                    'payment_review_status' => $this->normalizeBookingPaymentReviewStatus((string) ($booking['payment_review_status'] ?? 'waiting_admin')),
+                    'updated_at' => (string) ($booking['updated_at'] ?? $booking['created_at'] ?? $booking['start_at']),
                 ];
             }, $bookingRows);
         }
@@ -1027,7 +1390,14 @@ final class SalonRepository
         $bookings = array_merge($this->baseData['bookings'], $_SESSION['starstyle']['bookings']);
         usort($bookings, fn (array $a, array $b): int => strcmp($a['start_at'], $b['start_at']));
 
-        return $bookings;
+        return array_map(function (array $booking): array {
+            $booking['payment_method'] = (string) ($booking['payment_method'] ?? '');
+            $booking['payment_proof_path'] = (string) ($booking['payment_proof_path'] ?? '');
+            $booking['payment_proof_url'] = $this->paymentProofDataUrl((string) ($booking['payment_proof_path'] ?? ''));
+            $booking['payment_review_status'] = $this->normalizeBookingPaymentReviewStatus((string) ($booking['payment_review_status'] ?? 'waiting_admin'));
+
+            return $booking;
+        }, $bookings);
     }
 
     public function getBlocks(): array
@@ -1184,6 +1554,36 @@ final class SalonRepository
         ];
     }
 
+    public function calendarPagePayload(string $date): array
+    {
+        $calendar = $this->calendar($date);
+        $services = $this->getServices();
+        $packages = $this->getPackages();
+        $products = $this->getProducts();
+        $vouchers = $this->getVouchers();
+        $customers = $this->getCustomers();
+        $locations = $this->getLocations();
+        $discounts = $this->getVoucherDiscounts();
+
+        return [
+            'calendar' => $calendar,
+            'services' => $services,
+            'customers' => $customers,
+            'locations' => $locations,
+            'calendarResources' => $this->calendarResourceRows($locations),
+            'calendarDiscounts' => $this->calendarDiscountRows($discounts),
+            'calendarOwnedVouchers' => $this->calendarOwnedVoucherRows($customers, $vouchers),
+            'calendarSalesCatalogs' => [
+                'services' => $this->calendarSalesServiceRows($services),
+                'packages' => $this->calendarSalesPackageRows($packages, $services),
+                'products' => $this->calendarSalesProductRows($products),
+                'vouchers' => $this->calendarSalesVoucherRows($vouchers),
+                'plans' => [],
+                'payable' => $this->calendarPayableRows(),
+            ],
+        ];
+    }
+
     public function availability(array $serviceIds, int $staffId, string $date): array
     {
         $totalDuration = array_reduce($serviceIds, function (int $carry, int $serviceId): int {
@@ -1222,11 +1622,19 @@ final class SalonRepository
         $serviceStartTimes = array_values($payload['service_start_times'] ?? []);
         $serviceDurations = array_values($payload['service_durations'] ?? []);
         $serviceStaffIds = array_values($payload['service_staff_ids'] ?? []);
+        $serviceResources = array_values($payload['service_resources'] ?? []);
+        $servicePrices = array_values($payload['service_prices'] ?? []);
         $staffId = (int) ($payload['staff_id'] ?? 0);
         $date = trim((string) ($payload['date'] ?? ''));
         $time = trim((string) ($payload['time'] ?? ''));
         $customerName = trim((string) ($payload['customer_name'] ?? ''));
         $customerPhone = trim((string) ($payload['customer_phone'] ?? ''));
+        $customerEmail = trim((string) ($payload['customer_email'] ?? ''));
+        $bookingReference = trim((string) ($payload['booking_reference'] ?? ''));
+        $notes = trim((string) ($payload['notes'] ?? ''));
+        $paymentMethod = trim((string) ($payload['payment_method'] ?? ''));
+        $paymentProofPath = trim((string) ($payload['payment_proof_path'] ?? ''));
+        $paymentReviewStatus = $this->normalizeBookingPaymentReviewStatus((string) ($payload['payment_review_status'] ?? 'waiting_admin'));
 
         if ($serviceIds === [] || $staffId === 0 || $date === '' || $time === '' || $customerName === '') {
             return ['success' => false, 'message' => 'Mohon lengkapi layanan, staff, tanggal, dan data pelanggan.'];
@@ -1235,7 +1643,10 @@ final class SalonRepository
         $duration = array_reduce($serviceIds, fn (int $carry, int $serviceId): int => $carry + ((int) ($this->findService($serviceId)['duration'] ?? 0)), 0);
         $start = new \DateTimeImmutable("{$date} {$time}:00");
         $end = $start->modify("+{$duration} minutes");
-        $dailyBookings = array_filter($this->getBookings(), fn (array $booking): bool => $booking['staff_id'] === $staffId && str_starts_with($booking['start_at'], $date) && in_array($booking['status'], ['new', 'pending', 'confirmed', 'arrived', 'started'], true));
+        $dailyBookings = array_filter($this->getBookings(), fn (array $booking): bool => $booking['staff_id'] === $staffId
+            && str_starts_with($booking['start_at'], $date)
+            && in_array($booking['status'], ['new', 'pending', 'confirmed', 'arrived', 'started'], true)
+            && ((string) ($booking['reference'] ?? '') !== $bookingReference));
         $blocks = array_filter($this->getBlocks(), fn (array $block): bool => $block['staff_id'] === $staffId && str_starts_with($block['start_at'], $date));
 
         if ($this->hasOverlap($start, $end, $dailyBookings, $blocks)) {
@@ -1254,6 +1665,10 @@ final class SalonRepository
                 ? new \DateTimeImmutable("{$date} {$serviceStartTime}:00")
                 : $serviceCursor;
             $serviceEnd = $serviceStart->modify("+{$serviceDuration} minutes");
+            $servicePrice = isset($servicePrices[$index])
+                ? (float) $servicePrices[$index]
+                : (float) ($service['price'] ?? 0);
+            $resourceName = trim((string) ($serviceResources[$index] ?? ''));
 
             $serviceItems[] = [
                 'service_id' => $serviceId,
@@ -1261,6 +1676,9 @@ final class SalonRepository
                 'start_at' => $serviceStart->format('Y-m-d H:i:s'),
                 'end_at' => $serviceEnd->format('Y-m-d H:i:s'),
                 'duration' => $serviceDuration,
+                'price' => $servicePrice,
+                'resource_id' => $resourceName,
+                'resource_name' => $resourceName,
             ];
 
             if ($serviceStartTime === '') {
@@ -1269,39 +1687,92 @@ final class SalonRepository
         }
 
         $customerId = $this->resolveCustomer($customerName, $customerPhone);
+        $this->syncCustomerContact($customerId, $customerName, $customerPhone, $customerEmail);
 
         if ($this->usingDb()) {
-            $reference = 'BK-' . date('ymdHis');
-            $notes = trim((string) ($payload['notes'] ?? ''));
-            $channel = $source === 'customer' ? 'Portal Customer' : 'Internal';
+            $this->ensureBookingSchema();
+            $existingBooking = $bookingReference !== '' ? $this->bookingReferenceLookup($bookingReference) : null;
+            $reference = $existingBooking['reference'] ?? ('BK-' . date('ymdHis'));
+            $channel = (string) ($existingBooking['channel'] ?? ($source === 'customer' ? 'Portal Customer' : 'Internal'));
+            $status = (string) ($existingBooking['status'] ?? 'new');
+            $productsJson = $existingBooking['products_json'] ?? '[]';
+            $cancelReason = $existingBooking['cancel_reason'] ?? null;
+            $storedPaymentMethod = (string) ($existingBooking['payment_method'] ?? $paymentMethod);
+            $storedPaymentProofPath = (string) ($existingBooking['payment_proof_path'] ?? $paymentProofPath);
+            $storedPaymentReviewStatus = $this->normalizeBookingPaymentReviewStatus((string) ($existingBooking['payment_review_status'] ?? $paymentReviewStatus));
 
             $this->pdo()->beginTransaction();
             try {
-                $this->dbExecute(
-                    "INSERT INTO bookings (location_id, customer_id, staff_id, reference, channel, start_at, end_at, status, notes)
-                     VALUES (NULL, :customer_id, :staff_id, :reference, :channel, :start_at, :end_at, :status, :notes)",
-                    [
-                        'customer_id' => $customerId,
-                        'staff_id' => $staffId,
-                        'reference' => $reference,
-                        'channel' => $channel,
-                        'start_at' => $start->format('Y-m-d H:i:s'),
-                        'end_at' => $end->format('Y-m-d H:i:s'),
-                        'status' => 'new',
-                        'notes' => $notes !== '' ? $notes : null,
-                    ]
-                );
-                $bookingId = (int) $this->pdo()->lastInsertId();
+                if ($existingBooking !== null) {
+                    $bookingId = (int) $existingBooking['id'];
+                    $this->dbExecute(
+                        "UPDATE bookings
+                         SET customer_id = :customer_id,
+                             staff_id = :staff_id,
+                             channel = :channel,
+                             start_at = :start_at,
+                             end_at = :end_at,
+                             notes = :notes,
+                             cancel_reason = :cancel_reason,
+                             products_json = :products_json,
+                             payment_method = :payment_method,
+                             payment_proof_path = :payment_proof_path,
+                             payment_review_status = :payment_review_status,
+                             updated_at = NOW()
+                         WHERE id = :id",
+                        [
+                            'id' => $bookingId,
+                            'customer_id' => $customerId,
+                            'staff_id' => $staffId,
+                            'channel' => $channel,
+                            'start_at' => $start->format('Y-m-d H:i:s'),
+                            'end_at' => $end->format('Y-m-d H:i:s'),
+                            'notes' => $notes !== '' ? $notes : null,
+                            'cancel_reason' => $cancelReason !== '' ? $cancelReason : null,
+                            'products_json' => $productsJson,
+                            'payment_method' => $storedPaymentMethod !== '' ? $storedPaymentMethod : null,
+                            'payment_proof_path' => $storedPaymentProofPath !== '' ? $storedPaymentProofPath : null,
+                            'payment_review_status' => $storedPaymentReviewStatus,
+                        ]
+                    );
+                    $this->dbExecute("DELETE FROM booking_items WHERE booking_id = :booking_id", ['booking_id' => $bookingId]);
+                } else {
+                    $this->dbExecute(
+                        "INSERT INTO bookings (location_id, customer_id, staff_id, reference, channel, start_at, end_at, status, notes, cancel_reason, products_json, payment_method, payment_proof_path, payment_review_status, created_at, updated_at)
+                         VALUES (NULL, :customer_id, :staff_id, :reference, :channel, :start_at, :end_at, :status, :notes, :cancel_reason, :products_json, :payment_method, :payment_proof_path, :payment_review_status, NOW(), NOW())",
+                        [
+                            'customer_id' => $customerId,
+                            'staff_id' => $staffId,
+                            'reference' => $reference,
+                            'channel' => $channel,
+                            'start_at' => $start->format('Y-m-d H:i:s'),
+                            'end_at' => $end->format('Y-m-d H:i:s'),
+                            'status' => $status,
+                            'notes' => $notes !== '' ? $notes : null,
+                            'cancel_reason' => $cancelReason !== '' ? $cancelReason : null,
+                            'products_json' => $productsJson,
+                            'payment_method' => $paymentMethod !== '' ? $paymentMethod : null,
+                            'payment_proof_path' => $paymentProofPath !== '' ? $paymentProofPath : null,
+                            'payment_review_status' => $paymentReviewStatus,
+                        ]
+                    );
+                    $bookingId = (int) $this->pdo()->lastInsertId();
+                }
 
                 foreach ($serviceItems as $item) {
                     $this->dbExecute(
-                        "INSERT INTO booking_items (booking_id, service_id, duration_minutes, price)
-                         VALUES (:booking_id, :service_id, :duration, :price)",
+                        "INSERT INTO booking_items (booking_id, service_id, staff_id, duration_minutes, price, start_at, end_at, resource_id, resource_name)
+                         VALUES (:booking_id, :service_id, :staff_id, :duration, :price, :start_at, :end_at, :resource_id, :resource_name)",
                         [
                             'booking_id' => $bookingId,
                             'service_id' => (int) $item['service_id'],
+                            'staff_id' => (int) $item['staff_id'],
                             'duration' => (int) $item['duration'],
-                            'price' => (float) ($this->findService((int) $item['service_id'])['price'] ?? 0),
+                            'price' => (float) ($item['price'] ?? $this->findService((int) $item['service_id'])['price'] ?? 0),
+                            'start_at' => (string) $item['start_at'],
+                            'end_at' => (string) $item['end_at'],
+                            'resource_id' => (string) ($item['resource_id'] ?? ''),
+                            'resource_name' => (string) ($item['resource_name'] ?? ''),
                         ]
                     );
                 }
@@ -1311,16 +1782,18 @@ final class SalonRepository
                      VALUES (NULL, :actor_name, :action_text, NOW())",
                     [
                         'actor_name' => $source === 'customer' ? $customerName : 'Admin',
-                        'action_text' => 'Membuat booking ' . $reference,
+                        'action_text' => ($existingBooking !== null ? 'Memperbarui booking ' : 'Membuat booking ') . $reference,
                     ]
                 );
 
                 $this->pdo()->commit();
 
+                $booking = $this->bookingByReference($reference);
+
                 return [
                     'success' => true,
-                    'message' => 'Booking berhasil dibuat.',
-                    'booking' => [
+                    'message' => $existingBooking !== null ? 'Booking berhasil diperbarui.' : 'Booking berhasil dibuat.',
+                    'booking' => $booking ?? [
                         'id' => $bookingId,
                         'reference' => $reference,
                         'customer_id' => $customerId,
@@ -1329,9 +1802,16 @@ final class SalonRepository
                         'service_items' => $serviceItems,
                         'start_at' => $start->format('Y-m-d H:i:s'),
                         'end_at' => $end->format('Y-m-d H:i:s'),
-                        'status' => 'new',
+                        'status' => $status,
                         'channel' => $channel,
                         'notes' => $notes,
+                        'cancel_reason' => (string) $cancelReason,
+                        'products' => $this->normalizeStoredBookingProducts((string) $productsJson),
+                        'payment_method' => $storedPaymentMethod,
+                        'payment_proof_path' => $storedPaymentProofPath,
+                        'payment_proof_url' => $this->paymentProofDataUrl($storedPaymentProofPath),
+                        'payment_review_status' => $storedPaymentReviewStatus,
+                        'updated_at' => date('Y-m-d H:i:s'),
                     ],
                 ];
             } catch (\Throwable $throwable) {
@@ -1341,29 +1821,242 @@ final class SalonRepository
             }
         }
 
-        $id = $this->nextId($_SESSION['starstyle']['bookings'], 9000);
+        $existingIndex = null;
+        foreach ($_SESSION['starstyle']['bookings'] as $index => $bookingRow) {
+            if ((string) ($bookingRow['reference'] ?? '') === $bookingReference) {
+                $existingIndex = $index;
+                break;
+            }
+        }
+        $existingBooking = $existingIndex !== null ? ($_SESSION['starstyle']['bookings'][$existingIndex] ?? null) : null;
+        $existingPaymentMethod = is_array($existingBooking) ? (string) ($existingBooking['payment_method'] ?? $paymentMethod) : $paymentMethod;
+        $existingPaymentProofPath = is_array($existingBooking) ? (string) ($existingBooking['payment_proof_path'] ?? $paymentProofPath) : $paymentProofPath;
+        $existingPaymentReviewStatus = is_array($existingBooking)
+            ? $this->normalizeBookingPaymentReviewStatus((string) ($existingBooking['payment_review_status'] ?? $paymentReviewStatus))
+            : $paymentReviewStatus;
+        $id = (int) ($existingBooking['id'] ?? $this->nextId($_SESSION['starstyle']['bookings'], 9000));
         $booking = [
             'id' => $id,
-            'reference' => 'BK-' . date('ymd') . '-' . $id,
+            'reference' => (string) ($existingBooking['reference'] ?? ('BK-' . date('ymd') . '-' . $id)),
             'customer_id' => $customerId,
             'staff_id' => $staffId,
             'service_ids' => $serviceIds,
             'service_items' => $serviceItems,
             'start_at' => $start->format('Y-m-d H:i:s'),
             'end_at' => $end->format('Y-m-d H:i:s'),
-            'status' => 'new',
-            'channel' => $source === 'customer' ? 'Portal Customer' : 'Internal',
-            'notes' => trim((string) ($payload['notes'] ?? '')),
+            'status' => (string) ($existingBooking['status'] ?? 'new'),
+            'channel' => (string) ($existingBooking['channel'] ?? ($source === 'customer' ? 'Portal Customer' : 'Internal')),
+            'notes' => $notes,
+            'cancel_reason' => (string) ($existingBooking['cancel_reason'] ?? ''),
+            'products' => $this->normalizeStoredBookingProducts($existingBooking['products'] ?? []),
+            'payment_method' => $existingPaymentMethod,
+            'payment_proof_path' => $existingPaymentProofPath,
+            'payment_proof_url' => $this->paymentProofDataUrl($existingPaymentProofPath),
+            'payment_review_status' => $existingPaymentReviewStatus,
+            'updated_at' => date('Y-m-d H:i:s'),
         ];
 
-        $_SESSION['starstyle']['bookings'][] = $booking;
+        if ($existingIndex !== null) {
+            $_SESSION['starstyle']['bookings'][$existingIndex] = $booking;
+        } else {
+            $_SESSION['starstyle']['bookings'][] = $booking;
+        }
         $_SESSION['starstyle']['activity_logs'][] = [
             'time' => date('Y-m-d H:i:s'),
             'actor' => $source === 'customer' ? $customerName : 'Admin',
-            'action' => 'Membuat booking ' . $booking['reference'],
+            'action' => ($existingBooking !== null ? 'Memperbarui booking ' : 'Membuat booking ') . $booking['reference'],
         ];
 
-        return ['success' => true, 'message' => 'Booking berhasil dibuat.', 'booking' => $booking];
+        return ['success' => true, 'message' => $existingBooking !== null ? 'Booking berhasil diperbarui.' : 'Booking berhasil dibuat.', 'booking' => $booking];
+    }
+
+    public function updateBookingStatus(string $reference, string $status, string $actorName = 'Admin', string $reason = ''): array
+    {
+        $reference = trim($reference);
+        $status = trim($status);
+        if ($reference === '' || $status === '') {
+            throw new \InvalidArgumentException('Referensi booking atau status tidak valid.');
+        }
+
+        $normalizedStatus = strtolower(str_replace(' ', '_', $status));
+        $allowedStatuses = ['new', 'pending', 'confirmed', 'arrived', 'started', 'completed', 'cancelled', 'no_show'];
+        if (!in_array($normalizedStatus, $allowedStatuses, true)) {
+            throw new \InvalidArgumentException('Status booking tidak dikenali.');
+        }
+
+        if ($this->usingDb()) {
+            $this->ensureBookingSchema();
+            $booking = $this->bookingReferenceLookup($reference);
+            if ($booking === null) {
+                throw new \RuntimeException('Booking tidak ditemukan.');
+            }
+
+            $oldStatus = (string) ($booking['status'] ?? 'new');
+            $cancelReason = $normalizedStatus === 'cancelled' ? trim($reason) : null;
+
+            $this->pdo()->beginTransaction();
+            try {
+                $this->dbExecute(
+                    "UPDATE bookings
+                     SET status = :status,
+                         cancel_reason = :cancel_reason,
+                         updated_at = NOW()
+                     WHERE id = :id",
+                    [
+                        'id' => (int) $booking['id'],
+                        'status' => $normalizedStatus,
+                        'cancel_reason' => $cancelReason !== '' ? $cancelReason : null,
+                    ]
+                );
+
+                $this->dbExecute(
+                    "INSERT INTO booking_status_logs (booking_id, old_status, new_status, note, created_at)
+                     VALUES (:booking_id, :old_status, :new_status, :note, NOW())",
+                    [
+                        'booking_id' => (int) $booking['id'],
+                        'old_status' => $oldStatus,
+                        'new_status' => $normalizedStatus,
+                        'note' => $cancelReason !== '' ? $cancelReason : null,
+                    ]
+                );
+
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => sprintf('Mengubah status booking %s menjadi %s', $reference, strtoupper(str_replace('_', ' ', $normalizedStatus))),
+                    ]
+                );
+
+                $this->pdo()->commit();
+            } catch (\Throwable $throwable) {
+                $this->pdo()->rollBack();
+                throw $throwable;
+            }
+
+            return $this->bookingByReference($reference) ?? [];
+        }
+
+        foreach ($_SESSION['starstyle']['bookings'] as $index => $booking) {
+            if ((string) ($booking['reference'] ?? '') !== $reference) {
+                continue;
+            }
+
+            $_SESSION['starstyle']['bookings'][$index]['status'] = $normalizedStatus;
+            $_SESSION['starstyle']['bookings'][$index]['cancel_reason'] = $normalizedStatus === 'cancelled' ? trim($reason) : '';
+            $_SESSION['starstyle']['bookings'][$index]['updated_at'] = date('Y-m-d H:i:s');
+
+            return $_SESSION['starstyle']['bookings'][$index];
+        }
+
+        throw new \RuntimeException('Booking tidak ditemukan.');
+    }
+
+    public function updateBookingPaymentReviewStatus(string $reference, string $status, string $actorName = 'Admin'): array
+    {
+        $reference = trim($reference);
+        if ($reference === '') {
+            throw new \InvalidArgumentException('Referensi booking tidak valid.');
+        }
+
+        $normalizedStatus = $this->normalizeBookingPaymentReviewStatus($status);
+
+        if ($this->usingDb()) {
+            $this->ensureBookingSchema();
+            $booking = $this->bookingReferenceLookup($reference);
+            if ($booking === null) {
+                throw new \RuntimeException('Booking tidak ditemukan.');
+            }
+
+            $this->dbExecute(
+                "UPDATE bookings
+                 SET payment_review_status = :payment_review_status,
+                     updated_at = NOW()
+                 WHERE id = :id",
+                [
+                    'id' => (int) $booking['id'],
+                    'payment_review_status' => $normalizedStatus,
+                ]
+            );
+
+            $this->dbExecute(
+                "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                 VALUES (NULL, :actor_name, :action_text, NOW())",
+                [
+                    'actor_name' => $actorName,
+                    'action_text' => sprintf('Mengubah verifikasi pembayaran booking %s menjadi %s', $reference, strtoupper(str_replace('_', ' ', $normalizedStatus))),
+                ]
+            );
+
+            return $this->bookingByReference($reference) ?? [];
+        }
+
+        foreach ($_SESSION['starstyle']['bookings'] as $index => $booking) {
+            if ((string) ($booking['reference'] ?? '') !== $reference) {
+                continue;
+            }
+
+            $_SESSION['starstyle']['bookings'][$index]['payment_review_status'] = $normalizedStatus;
+            $_SESSION['starstyle']['bookings'][$index]['updated_at'] = date('Y-m-d H:i:s');
+
+            return $_SESSION['starstyle']['bookings'][$index];
+        }
+
+        throw new \RuntimeException('Booking tidak ditemukan.');
+    }
+
+    public function updateBookingProducts(string $reference, array $products, string $actorName = 'Admin'): array
+    {
+        $reference = trim($reference);
+        if ($reference === '') {
+            throw new \InvalidArgumentException('Referensi booking tidak valid.');
+        }
+
+        $normalizedProducts = $this->normalizeStoredBookingProducts($products);
+
+        if ($this->usingDb()) {
+            $this->ensureBookingSchema();
+            $booking = $this->bookingReferenceLookup($reference);
+            if ($booking === null) {
+                throw new \RuntimeException('Booking tidak ditemukan.');
+            }
+
+            $this->dbExecute(
+                "UPDATE bookings
+                 SET products_json = :products_json,
+                     updated_at = NOW()
+                 WHERE id = :id",
+                [
+                    'id' => (int) $booking['id'],
+                    'products_json' => json_encode($normalizedProducts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ]
+            );
+
+            $this->dbExecute(
+                "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                 VALUES (NULL, :actor_name, :action_text, NOW())",
+                [
+                    'actor_name' => $actorName,
+                    'action_text' => sprintf('Memperbarui produk booking %s', $reference),
+                ]
+            );
+
+            return $this->bookingByReference($reference) ?? [];
+        }
+
+        foreach ($_SESSION['starstyle']['bookings'] as $index => $booking) {
+            if ((string) ($booking['reference'] ?? '') !== $reference) {
+                continue;
+            }
+
+            $_SESSION['starstyle']['bookings'][$index]['products'] = $normalizedProducts;
+            $_SESSION['starstyle']['bookings'][$index]['updated_at'] = date('Y-m-d H:i:s');
+
+            return $_SESSION['starstyle']['bookings'][$index];
+        }
+
+        throw new \RuntimeException('Booking tidak ditemukan.');
     }
 
     public function createBlock(array $payload, array $actor): array
@@ -1604,6 +2297,7 @@ final class SalonRepository
                 'discount' => $discount,
                 'refund' => $refund,
             ],
+            'bookings' => $this->getBookings(),
             'transactions' => $transactions,
             'services' => $this->getServices(),
             'products' => $this->getProducts(),
@@ -1625,6 +2319,8 @@ final class SalonRepository
                 ], $this->dbAll("SELECT created_at, movement_type, amount, note FROM cash_movements ORDER BY created_at DESC"))
                 : $this->baseData['cash_movements'],
             'classes' => $this->getClasses(),
+            'staff' => $this->getStaff(),
+            'customers' => $this->getCustomers(),
         ];
     }
 
@@ -1805,8 +2501,9 @@ final class SalonRepository
 
             $expired = $voucher['expired_at'] < date('Y-m-d');
             $limitReached = $voucher['used'] >= $voucher['usage_limit'];
+            $status = strtolower(trim((string) ($voucher['status'] ?? '')));
 
-            if ($expired || $limitReached || $voucher['status'] !== 'Aktif') {
+            if ($expired || $limitReached || !in_array($status, ['aktif', 'active'], true)) {
                 return ['valid' => false, 'message' => 'Voucher tidak aktif atau sudah expired.', 'voucher' => $voucher];
             }
 
@@ -1819,37 +2516,103 @@ final class SalonRepository
     public function analytics(): array
     {
         $transactions = $this->getTransactions();
+        $services = $this->getServices();
+        $products = $this->getProducts();
+        $bookings = array_map(static function (array $booking): array {
+            return $booking + [
+                'date' => (string) ($booking['date'] ?? substr((string) ($booking['start_at'] ?? ''), 0, 10)),
+            ];
+        }, $this->getBookings());
         $customers = $this->getCustomers();
-        $inventory = $this->getProducts();
-        $bookings = $this->getBookings();
         $staff = $this->getStaff();
-        $vouchers = $this->getVouchers();
+        $vouchers = array_map(static function (array $voucher): array {
+            $type = (string) ($voucher['type'] ?? 'gift');
+            $status = strtolower(trim((string) ($voucher['status'] ?? '')));
+            $rawValue = $type === 'gift'
+                ? (float) ($voucher['editor_value'] ?? $voucher['value'] ?? 0)
+                : (float) ($voucher['price_value'] ?? $voucher['editor_value'] ?? 0);
+
+            return $voucher + [
+                'type' => $type,
+                'value' => $rawValue,
+                'status' => in_array($status, ['active', 'aktif'], true)
+                    ? 'aktif'
+                    : ($status !== '' ? $status : 'nonaktif'),
+            ];
+        }, $this->getVouchers());
         $classes = $this->getClasses();
+
+        $paidTransactions = array_values(array_filter(
+            $transactions,
+            static fn (array $transaction): bool => strtolower((string) ($transaction['status'] ?? '')) === 'paid'
+        ));
+        $currentPeriodStart = new \DateTimeImmutable('-29 days');
+        $previousPeriodStart = new \DateTimeImmutable('-59 days');
+        $previousPeriodEnd = new \DateTimeImmutable('-30 days');
+
+        $currentTransactions = array_values(array_filter(
+            $paidTransactions,
+            static fn (array $transaction): bool => new \DateTimeImmutable((string) ($transaction['date'] ?? 'now')) >= $currentPeriodStart
+        ));
+        $previousTransactions = array_values(array_filter(
+            $paidTransactions,
+            static fn (array $transaction): bool => ($date = new \DateTimeImmutable((string) ($transaction['date'] ?? 'now'))) >= $previousPeriodStart && $date <= $previousPeriodEnd
+        ));
+
+        $currentSales = array_sum(array_map(fn (array $transaction): float => $this->analyticsTransactionNetTotal($transaction), $currentTransactions));
+        $previousSales = array_sum(array_map(fn (array $transaction): float => $this->analyticsTransactionNetTotal($transaction), $previousTransactions));
+
+        $currentBookings = array_values(array_filter(
+            $bookings,
+            static fn (array $booking): bool => new \DateTimeImmutable((string) ($booking['start_at'] ?? 'now')) >= $currentPeriodStart
+        ));
+        $completedBookings = count(array_filter(
+            $currentBookings,
+            static fn (array $booking): bool => in_array(strtolower((string) ($booking['status'] ?? '')), ['completed', 'done', 'selesai'], true)
+        ));
+        $cancelledBookings = count(array_filter(
+            $currentBookings,
+            static fn (array $booking): bool => in_array(strtolower((string) ($booking['status'] ?? '')), ['cancelled', 'canceled', 'batal', 'no_show', 'no-show'], true)
+        ));
+        $conversionBase = max(1, count($currentBookings));
+        $conversionRate = round((($conversionBase - $cancelledBookings) / $conversionBase) * 100);
+
+        $activeCustomers = array_filter($customers, static fn (array $customer): bool => strtolower((string) ($customer['status'] ?? 'aktif')) === 'aktif');
+        $returningCustomers = count(array_filter(
+            $activeCustomers,
+            static fn (array $customer): bool => (int) ($customer['loyalty_points'] ?? 0) >= 100 || in_array('VIP', (array) ($customer['tags'] ?? []), true)
+        ));
+        $retentionRate = count($activeCustomers) > 0 ? round(($returningCustomers / count($activeCustomers)) * 100) : 0;
+        $lowStockCount = count(array_filter($products, static fn (array $product): bool => (int) ($product['stock'] ?? 0) <= 8));
 
         return [
             'kpis' => [
-                ['label' => 'Appointment Conversion', 'value' => '86%'],
-                ['label' => 'Sales Growth', 'value' => '+18%'],
-                ['label' => 'Retention Rate', 'value' => '72%'],
-                ['label' => 'Low Stock Item', 'value' => (string) count(array_filter($inventory, fn (array $product): bool => $product['stock'] <= 8))],
+                ['label' => 'Appointment Conversion', 'value' => $conversionRate . '%'],
+                ['label' => 'Sales Growth', 'value' => $this->formatSignedPercent($this->percentChange($currentSales, $previousSales))],
+                ['label' => 'Retention Rate', 'value' => $retentionRate . '%'],
+                ['label' => 'Low Stock Item', 'value' => (string) $lowStockCount],
             ],
             'salesByType' => [
                 'service' => array_sum(array_map(fn (array $transaction): float => $this->sumItemsByType($transaction['items'], 'service'), $transactions)),
                 'product' => array_sum(array_map(fn (array $transaction): float => $this->sumItemsByType($transaction['items'], 'product'), $transactions)),
-                'voucher' => 240000,
+                'voucher' => array_sum(array_map(fn (array $transaction): float => $this->sumItemsByType($transaction['items'], 'voucher'), $transactions)),
+                'package' => array_sum(array_map(fn (array $transaction): float => $this->sumItemsByType($transaction['items'], 'package'), $transactions)),
             ],
             'retention' => [
-                'new' => 24,
-                'returning' => 61,
+                'new' => max(0, count($activeCustomers) - $returningCustomers),
+                'returning' => $returningCustomers,
                 'vip' => count(array_filter($customers, fn (array $customer): bool => in_array('VIP', $customer['tags'], true))),
             ],
-            'inventory' => $inventory,
+            'inventory' => $products,
             'bookings' => $bookings,
             'transactions' => $transactions,
             'customers' => $customers,
             'staff' => $staff,
             'vouchers' => $vouchers,
             'classes' => $classes,
+            'services' => $services,
+            'products' => $products,
+            'analytics_generated_at' => date('Y-m-d H:i:s'),
         ];
     }
 
@@ -1865,6 +2628,423 @@ final class SalonRepository
         ];
     }
 
+    public function saveStaff(?int $staffId, array $payload, string $actorName): array
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penyimpanan staff hanya tersedia pada data source DB.');
+        }
+
+        $this->ensureStaffProfileSchema();
+        $record = $this->normalizeStaffPayload($payload);
+        if ($record['name'] === '') {
+            throw new \InvalidArgumentException('Nama staff wajib diisi.');
+        }
+
+        $existing = $staffId !== null ? $this->findStaff($staffId) : null;
+        $this->pdo()->beginTransaction();
+        try {
+            $userId = $existing['user_id'] ?? null;
+            if ($userId === null && $record['email'] !== null) {
+                $matchedUser = $this->dbOne(
+                    "SELECT id
+                     FROM users
+                     WHERE LOWER(email) = LOWER(:email) AND portal = 'internal'
+                     LIMIT 1",
+                    ['email' => $record['email']]
+                );
+                if ($matchedUser !== null) {
+                    $userId = (int) $matchedUser['id'];
+                }
+            }
+
+            if ($userId === null) {
+                $this->dbExecute(
+                    "INSERT INTO users (role_id, name, email, password, portal, avatar, is_active)
+                     VALUES (:role_id, :name, :email, :password, 'internal', :avatar, :is_active)",
+                    [
+                        'role_id' => $this->staffRoleId(),
+                        'name' => $record['name'],
+                        'email' => $record['email'] ?? $this->generateFallbackStaffEmail($record['name']),
+                        'password' => password_hash('password123', PASSWORD_DEFAULT),
+                        'avatar' => strtoupper(substr(preg_replace('/\s+/', '', $record['name']), 0, 2)),
+                        'is_active' => $record['status'] === 'Aktif' ? 1 : 0,
+                    ]
+                );
+                $userId = (int) $this->pdo()->lastInsertId();
+            } else {
+                $this->dbExecute(
+                    "UPDATE users
+                     SET name = :name,
+                         email = :email,
+                         is_active = :is_active
+                     WHERE id = :id",
+                    [
+                        'id' => $userId,
+                        'name' => $record['name'],
+                        'email' => $record['email'] ?? $this->generateFallbackStaffEmail($record['name']),
+                        'is_active' => $record['status'] === 'Aktif' ? 1 : 0,
+                    ]
+                );
+            }
+
+            if ($staffId === null) {
+                $this->dbExecute(
+                    "INSERT INTO staff (
+                        user_id, location_id, name, email, phone, role_title, status, commission_type, commission_value, rating,
+                        gender, booking_enabled, agenda_color, started_working_on, ended_working_on, public_title, notes,
+                        instagram_handle, photo_data_url, commission_rules, attendance_pose, attendance_uploaded_pose
+                    ) VALUES (
+                        :user_id, :location_id, :name, :email, :phone, :role_title, :status, :commission_type, :commission_value, :rating,
+                        :gender, :booking_enabled, :agenda_color, :started_working_on, :ended_working_on, :public_title, :notes,
+                        :instagram_handle, :photo_data_url, :commission_rules, :attendance_pose, :attendance_uploaded_pose
+                    )",
+                    $record + ['user_id' => $userId]
+                );
+                $staffId = (int) $this->pdo()->lastInsertId();
+            } else {
+                $this->dbExecute(
+                    "UPDATE staff
+                     SET user_id = :user_id,
+                         location_id = :location_id,
+                         name = :name,
+                         email = :email,
+                         phone = :phone,
+                         role_title = :role_title,
+                         status = :status,
+                         commission_type = :commission_type,
+                         commission_value = :commission_value,
+                         rating = :rating,
+                         gender = :gender,
+                         booking_enabled = :booking_enabled,
+                         agenda_color = :agenda_color,
+                         started_working_on = :started_working_on,
+                         ended_working_on = :ended_working_on,
+                         public_title = :public_title,
+                         notes = :notes,
+                         instagram_handle = :instagram_handle,
+                         photo_data_url = :photo_data_url,
+                         commission_rules = :commission_rules,
+                         attendance_pose = :attendance_pose,
+                         attendance_uploaded_pose = :attendance_uploaded_pose
+                     WHERE id = :staff_id AND deleted_at IS NULL",
+                    $record + ['user_id' => $userId, 'staff_id' => $staffId]
+                );
+            }
+
+            $this->dbExecute("DELETE FROM staff_skills WHERE staff_id = :staff_id", ['staff_id' => $staffId]);
+            foreach ($record['service_ids_raw'] as $serviceId) {
+                $this->dbExecute(
+                    "INSERT INTO staff_skills (staff_id, service_id) VALUES (:staff_id, :service_id)",
+                    [
+                        'staff_id' => $staffId,
+                        'service_id' => $serviceId,
+                    ]
+                );
+            }
+
+            if ($this->tableExists('staff_permissions')) {
+                $this->dbExecute("DELETE FROM staff_permissions WHERE staff_id = :staff_id", ['staff_id' => $staffId]);
+                foreach ($this->staffPermissionDefaultsByRoleTitle($record['role_title'], (bool) $record['booking_enabled']) as $permissionKey) {
+                    $this->dbExecute(
+                        "INSERT INTO staff_permissions (staff_id, permission_key, granted, created_at)
+                         VALUES (:staff_id, :permission_key, 1, NOW())",
+                        [
+                            'staff_id' => $staffId,
+                            'permission_key' => $permissionKey,
+                        ]
+                    );
+                }
+            }
+
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => ($existing === null ? 'Menambah' : 'Memperbarui') . ' staff #' . $staffId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+            throw $throwable;
+        }
+
+        return $this->findStaff($staffId) ?? throw new \RuntimeException('Staff gagal dimuat ulang.');
+    }
+
+    public function deleteStaff(int $staffId, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penghapusan staff hanya tersedia pada data source DB.');
+        }
+
+        $staff = $this->dbOne(
+            "SELECT id, user_id
+             FROM staff
+             WHERE id = :id AND deleted_at IS NULL
+             LIMIT 1",
+            ['id' => $staffId]
+        );
+        if ($staff === null) {
+            throw new \InvalidArgumentException('Staff tidak ditemukan.');
+        }
+
+        $this->pdo()->beginTransaction();
+        try {
+            $this->dbExecute("UPDATE staff SET deleted_at = NOW(), status = 'Nonaktif' WHERE id = :id", ['id' => $staffId]);
+            if ($staff['user_id'] !== null) {
+                $this->dbExecute("UPDATE users SET is_active = 0 WHERE id = :id", ['id' => (int) $staff['user_id']]);
+            }
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => 'Menghapus staff #' . $staffId,
+                    ]
+                );
+            }
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+            throw $throwable;
+        }
+    }
+
+    public function saveStaffShifts(int $staffId, string $startDate, string $repeatMode, string $repeatEnd, ?string $repeatEndDate, array $shifts, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Jadwal staff hanya tersedia pada data source DB.');
+        }
+
+        $this->ensureStaffScheduleSchema();
+        $this->ensureStaffProfileSchema();
+        $staff = $this->findStaff($staffId);
+        if ($staff === null) {
+            throw new \InvalidArgumentException('Staff tidak ditemukan.');
+        }
+
+        $dates = $this->expandShiftDates($startDate, $repeatMode, $repeatEnd, $repeatEndDate);
+        if ($dates === []) {
+            throw new \InvalidArgumentException('Tanggal shift tidak valid.');
+        }
+
+        $cleanShifts = [];
+        foreach ($shifts as $shift) {
+            $start = substr(trim((string) ($shift['start'] ?? '')), 0, 5);
+            $end = substr(trim((string) ($shift['end'] ?? '')), 0, 5);
+            if (!preg_match('/^\d{2}:\d{2}$/', $start) || !preg_match('/^\d{2}:\d{2}$/', $end)) {
+                continue;
+            }
+            $cleanShifts[] = ['start' => $start, 'end' => $end];
+        }
+        if ($cleanShifts === []) {
+            throw new \InvalidArgumentException('Shift minimal harus memiliki satu jam kerja yang valid.');
+        }
+
+        $this->pdo()->beginTransaction();
+        try {
+            foreach ($dates as $date) {
+                $this->dbExecute(
+                    "DELETE FROM staff_shifts
+                     WHERE staff_id = :staff_id AND shift_date = :shift_date",
+                    [
+                        'staff_id' => $staffId,
+                        'shift_date' => $date,
+                    ]
+                );
+                foreach ($cleanShifts as $shift) {
+                    $this->dbExecute(
+                        "INSERT INTO staff_shifts (staff_id, shift_date, start_time, end_time, repeat_mode)
+                         VALUES (:staff_id, :shift_date, :start_time, :end_time, :repeat_mode)",
+                        [
+                            'staff_id' => $staffId,
+                            'shift_date' => $date,
+                            'start_time' => $shift['start'] . ':00',
+                            'end_time' => $shift['end'] . ':00',
+                            'repeat_mode' => $repeatMode,
+                        ]
+                    );
+                }
+            }
+
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => 'Mengatur shift staff #' . $staffId . ' mulai ' . $startDate,
+                    ]
+                );
+            }
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+            throw $throwable;
+        }
+    }
+
+    public function deleteStaffShifts(int $staffId, string $startDate, string $repeatMode, string $repeatEnd, ?string $repeatEndDate, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Jadwal staff hanya tersedia pada data source DB.');
+        }
+
+        $this->ensureStaffScheduleSchema();
+        $dates = $this->expandShiftDates($startDate, $repeatMode, $repeatEnd, $repeatEndDate);
+        if ($dates === []) {
+            $dates = [$startDate];
+        }
+
+        $this->pdo()->beginTransaction();
+        try {
+            foreach ($dates as $date) {
+                $this->dbExecute(
+                    "DELETE FROM staff_shifts
+                     WHERE staff_id = :staff_id AND shift_date = :shift_date",
+                    [
+                        'staff_id' => $staffId,
+                        'shift_date' => $date,
+                    ]
+                );
+            }
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => 'Menghapus shift staff #' . $staffId . ' mulai ' . $startDate,
+                    ]
+                );
+            }
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+            throw $throwable;
+        }
+    }
+
+    public function saveStaffAttendance(array $payload, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Attendance staff hanya tersedia pada data source DB.');
+        }
+
+        $this->ensureStaffScheduleSchema();
+        $staffId = (int) ($payload['staff_id'] ?? 0);
+        $attendanceDate = trim((string) ($payload['attendance_date'] ?? ''));
+        if ($staffId === 0 || $attendanceDate === '') {
+            throw new \InvalidArgumentException('Staff dan tanggal attendance wajib diisi.');
+        }
+
+        $record = [
+            'staff_id' => $staffId,
+            'attendance_date' => $attendanceDate,
+            'shift_start' => substr((string) ($payload['shift_start'] ?? '08:00'), 0, 5) . ':00',
+            'shift_end' => substr((string) ($payload['shift_end'] ?? '17:00'), 0, 5) . ':00',
+            'clock_in' => substr((string) ($payload['clock_in'] ?? '08:00'), 0, 5) . ':00',
+            'clock_out' => substr((string) ($payload['clock_out'] ?? '17:00'), 0, 5) . ':00',
+            'source' => (string) ($payload['source'] ?? '-'),
+            'status' => (string) ($payload['status'] ?? 'Ontime'),
+            'selfie_in_score' => (float) ($payload['selfie_in_score'] ?? 0),
+            'selfie_out_score' => (float) ($payload['selfie_out_score'] ?? 0),
+        ];
+
+        $existing = $this->dbOne(
+            "SELECT id
+             FROM staff_attendance
+             WHERE staff_id = :staff_id AND attendance_date = :attendance_date
+             LIMIT 1",
+            [
+                'staff_id' => $staffId,
+                'attendance_date' => $attendanceDate,
+            ]
+        );
+
+        if ($existing === null) {
+            $this->dbExecute(
+                "INSERT INTO staff_attendance
+                 (staff_id, attendance_date, shift_start, shift_end, clock_in, clock_out, source, status, selfie_in_score, selfie_out_score)
+                 VALUES
+                 (:staff_id, :attendance_date, :shift_start, :shift_end, :clock_in, :clock_out, :source, :status, :selfie_in_score, :selfie_out_score)",
+                $record
+            );
+        } else {
+            $this->dbExecute(
+                "UPDATE staff_attendance
+                 SET shift_start = :shift_start,
+                     shift_end = :shift_end,
+                     clock_in = :clock_in,
+                     clock_out = :clock_out,
+                     source = :source,
+                     status = :status,
+                     selfie_in_score = :selfie_in_score,
+                     selfie_out_score = :selfie_out_score
+                 WHERE id = :id",
+                $record + ['id' => (int) $existing['id']]
+            );
+        }
+
+        if ($this->tableExists('activity_logs')) {
+            $this->dbExecute(
+                "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                 VALUES (NULL, :actor_name, :action_text, NOW())",
+                [
+                    'actor_name' => $actorName,
+                    'action_text' => 'Mengatur attendance staff #' . $staffId . ' tanggal ' . $attendanceDate,
+                ]
+            );
+        }
+    }
+
+    public function updateStaffAttendanceProfile(int $staffId, bool $active, string $pose, string $uploadedPose, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Profil attendance staff hanya tersedia pada data source DB.');
+        }
+
+        $this->ensureStaffProfileSchema();
+        $this->dbExecute(
+            "UPDATE staff
+             SET status = :status,
+                 attendance_pose = :attendance_pose,
+                 attendance_uploaded_pose = :attendance_uploaded_pose
+             WHERE id = :id AND deleted_at IS NULL",
+            [
+                'id' => $staffId,
+                'status' => $active ? 'Aktif' : 'Nonaktif',
+                'attendance_pose' => $pose !== '' ? $pose : 'Right Tilt',
+                'attendance_uploaded_pose' => $uploadedPose !== '' ? $uploadedPose : null,
+            ]
+        );
+
+        if ($this->tableExists('activity_logs')) {
+            $this->dbExecute(
+                "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                 VALUES (NULL, :actor_name, :action_text, NOW())",
+                [
+                    'actor_name' => $actorName,
+                    'action_text' => 'Mengubah profil attendance staff #' . $staffId,
+                ]
+            );
+        }
+    }
+
     public function customerAccount(int $customerId): array
     {
         return [
@@ -1872,6 +3052,309 @@ final class SalonRepository
             'bookings' => array_values(array_filter($this->getBookings(), fn (array $booking): bool => $booking['customer_id'] === $customerId)),
             'transactions' => array_values(array_filter($this->getTransactions(), fn (array $transaction): bool => $transaction['customer_id'] === $customerId)),
             'vouchers' => $this->getVouchers(),
+        ];
+    }
+
+    public function customerDetail(int $customerId): ?array
+    {
+        $customer = $this->findCustomer($customerId);
+        if ($customer === null) {
+            return null;
+        }
+
+        if (!$this->usingDb()) {
+            return [
+                'customer' => $customer,
+                'detail' => $this->buildCustomerDetailPayload($customer, [], [], []),
+            ];
+        }
+
+        $this->ensureCustomerSchema();
+            $bookings = $this->dbAll(
+                "SELECT b.id, b.reference, b.start_at, b.status, b.notes,
+                    COALESCE(s.name, 'Staff') AS staff_name,
+                    COALESCE(l.name, :fallback_location) AS location_name,
+                    COALESCE(SUM(bi.price), 0) AS total_amount,
+                    GROUP_CONCAT(DISTINCT sv.name ORDER BY sv.name SEPARATOR ', ') AS service_names
+             FROM bookings b
+             LEFT JOIN staff s ON s.id = b.staff_id
+             LEFT JOIN locations l ON l.id = b.location_id
+             LEFT JOIN booking_items bi ON bi.booking_id = b.id
+             LEFT JOIN services sv ON sv.id = bi.service_id
+             WHERE b.customer_id = :customer_id
+             GROUP BY b.id, b.reference, b.start_at, b.status, b.notes, s.name, l.name
+             ORDER BY b.start_at DESC",
+            [
+                'customer_id' => $customerId,
+                'fallback_location' => (string) ($this->config['business']['name'] ?? 'Star Salon'),
+            ]
+        );
+        $transactions = $this->dbAll(
+            "SELECT t.id, t.reference, t.status, t.discount_amount, t.rounding_amount, t.paid_at,
+                    COALESCE(i.invoice_number, t.reference) AS invoice_number,
+                    COALESCE(loc.name, :fallback_location) AS location_name,
+                    COALESCE(SUM(ti.quantity * ti.price), 0) AS gross_total,
+                    COALESCE(SUM(CASE WHEN ti.item_type = 'service' THEN ti.quantity * ti.price ELSE 0 END), 0) AS service_total,
+                    COALESCE(SUM(CASE WHEN ti.item_type = 'product' THEN ti.quantity * ti.price ELSE 0 END), 0) AS product_total,
+                    COALESCE(SUM(CASE WHEN ti.item_type = 'service' THEN ti.quantity ELSE 0 END), 0) AS service_qty,
+                    COALESCE(SUM(CASE WHEN ti.item_type = 'product' THEN ti.quantity ELSE 0 END), 0) AS product_qty,
+                    GROUP_CONCAT(DISTINCT CASE WHEN ti.item_type = 'service' THEN ti.item_name END ORDER BY ti.item_name SEPARATOR ', ') AS service_names,
+                    GROUP_CONCAT(DISTINCT CASE WHEN ti.item_type = 'product' THEN CONCAT(ti.item_name, ' x', ti.quantity) END ORDER BY ti.item_name SEPARATOR ', ') AS product_names
+             FROM transactions t
+             LEFT JOIN invoices i ON i.transaction_id = t.id
+             LEFT JOIN bookings b ON b.id = t.booking_id
+             LEFT JOIN locations loc ON loc.id = b.location_id
+             LEFT JOIN transaction_items ti ON ti.transaction_id = t.id
+             WHERE t.customer_id = :customer_id
+             GROUP BY t.id, t.reference, t.status, t.discount_amount, t.rounding_amount, t.paid_at, i.invoice_number, loc.name
+             ORDER BY t.paid_at DESC",
+            [
+                'customer_id' => $customerId,
+                'fallback_location' => (string) ($this->config['business']['name'] ?? 'Star Salon'),
+            ]
+        );
+        $voucherUsage = (int) ($this->dbOne(
+            "SELECT COUNT(*) AS total
+             FROM voucher_redemptions
+             WHERE customer_id = :customer_id",
+            ['customer_id' => $customerId]
+        )['total'] ?? 0);
+
+        return [
+            'customer' => $customer,
+            'detail' => $this->buildCustomerDetailPayload($customer, $bookings, $transactions, ['voucher_usage' => $voucherUsage]),
+        ];
+    }
+
+    public function saveCustomer(?int $customerId, array $payload, string $actorName): array
+    {
+        if ($this->usingDb()) {
+            $this->ensureCustomerSchema();
+            $record = $this->normalizeCustomerPayload($payload);
+            $existing = $customerId !== null ? $this->findCustomer($customerId) : null;
+
+            if ($record['name'] === '') {
+                throw new \InvalidArgumentException('Nama pelanggan wajib diisi.');
+            }
+
+            if ($record['member_id'] === '') {
+                $record['member_id'] = $this->generateCustomerMemberId();
+            }
+
+            $memberOwner = $this->dbOne(
+                "SELECT id
+                 FROM customers
+                 WHERE deleted_at IS NULL
+                   AND member_id = :member_id
+                   AND (:customer_id_match IS NULL OR id <> :customer_id_exclude)
+                 LIMIT 1",
+                [
+                    'member_id' => $record['member_id'],
+                    'customer_id_match' => $customerId,
+                    'customer_id_exclude' => $customerId,
+                ]
+            );
+            if ($memberOwner !== null) {
+                throw new \InvalidArgumentException('Member ID sudah dipakai pelanggan lain.');
+            }
+
+            $this->pdo()->beginTransaction();
+            try {
+                if ($customerId === null) {
+                    $this->dbExecute(
+                        "INSERT INTO customers (
+                            user_id, member_id, name, gender, phone, email, loyalty_points, last_visit_at, tags, notes, address, status,
+                            birthdate, family_card_number, passport_number, notify_via, marketing_opt_in
+                        ) VALUES (
+                            NULL, :member_id, :name, :gender, :phone, :email, :loyalty_points, :last_visit_at, :tags, :notes, :address, :status,
+                            :birthdate, :family_card_number, :passport_number, :notify_via, :marketing_opt_in
+                        )",
+                        $record
+                    );
+                    $customerId = (int) $this->pdo()->lastInsertId();
+                } else {
+                    $this->dbExecute(
+                        "UPDATE customers
+                         SET member_id = :member_id,
+                             name = :name,
+                             gender = :gender,
+                             phone = :phone,
+                             email = :email,
+                             loyalty_points = :loyalty_points,
+                             last_visit_at = :last_visit_at,
+                             tags = :tags,
+                             notes = :notes,
+                             address = :address,
+                             status = :status,
+                             birthdate = :birthdate,
+                             family_card_number = :family_card_number,
+                             passport_number = :passport_number,
+                             notify_via = :notify_via,
+                             marketing_opt_in = :marketing_opt_in
+                         WHERE id = :customer_id AND deleted_at IS NULL",
+                        $record + ['customer_id' => $customerId]
+                    );
+                }
+
+                $customerRow = $this->dbOne(
+                    "SELECT user_id
+                     FROM customers
+                     WHERE id = :id AND deleted_at IS NULL
+                     LIMIT 1",
+                    ['id' => $customerId]
+                );
+
+                if ($customerRow !== null && $customerRow['user_id'] !== null) {
+                    $this->dbExecute(
+                        "UPDATE users
+                         SET name = :name,
+                             email = :email
+                         WHERE id = :id",
+                        [
+                            'id' => (int) $customerRow['user_id'],
+                            'name' => $record['name'],
+                            'email' => $record['email'] !== null ? $record['email'] : ('customer-' . $customerId . '@starstyle.test'),
+                        ]
+                    );
+                }
+
+                if ($this->tableExists('activity_logs')) {
+                    $this->dbExecute(
+                        "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                         VALUES (NULL, :actor_name, :action_text, NOW())",
+                        [
+                            'actor_name' => $actorName,
+                            'action_text' => ($existing === null ? 'Menambah' : 'Memperbarui') . ' customer #' . $customerId,
+                        ]
+                    );
+                }
+
+                $this->pdo()->commit();
+            } catch (\Throwable $throwable) {
+                $this->pdo()->rollBack();
+                throw $throwable;
+            }
+
+            return $this->findCustomer($customerId) ?? throw new \RuntimeException('Customer gagal dimuat ulang.');
+        }
+
+        throw new \RuntimeException('Penyimpanan customer hanya tersedia pada data source DB.');
+    }
+
+    public function deleteCustomer(int $customerId, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penghapusan customer hanya tersedia pada data source DB.');
+        }
+
+        $customer = $this->dbOne(
+            "SELECT id, user_id
+             FROM customers
+             WHERE id = :id AND deleted_at IS NULL
+             LIMIT 1",
+            ['id' => $customerId]
+        );
+
+        if ($customer === null) {
+            throw new \InvalidArgumentException('Customer tidak ditemukan.');
+        }
+
+        $this->pdo()->beginTransaction();
+        try {
+            $this->dbExecute(
+                "UPDATE customers
+                 SET deleted_at = NOW(), status = 'Non-Aktif'
+                 WHERE id = :id",
+                ['id' => $customerId]
+            );
+
+            if ($customer['user_id'] !== null) {
+                $this->dbExecute(
+                    "UPDATE users
+                     SET is_active = 0
+                     WHERE id = :id",
+                    ['id' => (int) $customer['user_id']]
+                );
+            }
+
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => 'Menghapus customer #' . $customerId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            $this->pdo()->rollBack();
+            throw $throwable;
+        }
+    }
+
+    public function importCustomers(array $rows, string $actorName): array
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Import customer hanya tersedia pada data source DB.');
+        }
+
+        $created = 0;
+        $updated = 0;
+        $errors = [];
+
+        foreach ($rows as $index => $row) {
+            try {
+                $memberId = trim((string) ($row['member_id'] ?? $row['memberId'] ?? ''));
+                $email = trim((string) ($row['email'] ?? ''));
+                $phone = trim((string) ($row['phone'] ?? ''));
+                $existing = null;
+
+                if ($memberId !== '') {
+                    $existing = $this->dbOne(
+                        "SELECT id
+                         FROM customers
+                         WHERE deleted_at IS NULL AND member_id = :member_id
+                         LIMIT 1",
+                        ['member_id' => $memberId]
+                    );
+                }
+                if ($existing === null && $email !== '') {
+                    $existing = $this->dbOne(
+                        "SELECT id
+                         FROM customers
+                         WHERE deleted_at IS NULL AND email = :email
+                         LIMIT 1",
+                        ['email' => $email]
+                    );
+                }
+                if ($existing === null && $phone !== '') {
+                    $existing = $this->dbOne(
+                        "SELECT id
+                         FROM customers
+                         WHERE deleted_at IS NULL AND phone = :phone
+                         LIMIT 1",
+                        ['phone' => $phone]
+                    );
+                }
+
+                $saved = $this->saveCustomer($existing !== null ? (int) $existing['id'] : null, $row, $actorName);
+                if ($existing === null) {
+                    $created++;
+                } elseif ($saved !== []) {
+                    $updated++;
+                }
+            } catch (\Throwable $throwable) {
+                $errors[] = 'Baris ' . ($index + 1) . ': ' . $throwable->getMessage();
+            }
+        }
+
+        return [
+            'created' => $created,
+            'updated' => $updated,
+            'errors' => $errors,
         ];
     }
 
@@ -1917,6 +3400,126 @@ final class SalonRepository
             'catalog' => $this->permissions['catalog'],
             'staff' => $staff,
         ];
+    }
+
+    public function updateBusinessProfile(array $payload, string $actorName): array
+    {
+        $businessName = trim((string) ($payload['business_name'] ?? ''));
+        $address = trim((string) ($payload['address'] ?? ''));
+        $notificationChannel = trim((string) ($payload['notification_channel'] ?? ''));
+        $timezone = trim((string) ($payload['timezone'] ?? '')) ?: ($this->config['timezone'] ?? 'Asia/Bangkok');
+        $schedulePayload = json_decode((string) ($payload['hours_schedule_json'] ?? '[]'), true);
+
+        if ($businessName === '') {
+            return ['success' => false, 'message' => 'Nama bisnis wajib diisi.'];
+        }
+
+        $schedule = $this->normalizeBusinessHoursSchedule($schedulePayload);
+        $activeDays = array_values(array_filter($schedule, static fn (array $day): bool => !empty($day['enabled'])));
+        if ($activeDays === []) {
+            return ['success' => false, 'message' => 'Pilih minimal satu hari operasional.'];
+        }
+
+        foreach ($activeDays as $day) {
+            $openTime = (string) ($day['open'] ?? '');
+            $closeTime = (string) ($day['close'] ?? '');
+            if (preg_match('/^\d{2}:\d{2}$/', $openTime) !== 1 || preg_match('/^\d{2}:\d{2}$/', $closeTime) !== 1) {
+                return ['success' => false, 'message' => 'Format jam operasional harus HH:MM.'];
+            }
+            if (strcmp($openTime, $closeTime) >= 0) {
+                return ['success' => false, 'message' => 'Jam buka harus lebih kecil dari jam tutup.'];
+            }
+        }
+
+        $hours = $this->summarizeBusinessHoursSchedule($schedule);
+
+        if ($this->usingDb()) {
+            $this->ensureBusinessSettingsSchema();
+            $existing = $this->dbOne(
+                "SELECT id, booking_advance_days, loyalty_ratio, currency
+                 FROM business_settings
+                 ORDER BY id ASC
+                 LIMIT 1"
+            );
+
+            $bookingAdvanceDays = (int) ($existing['booking_advance_days'] ?? 30);
+            $loyaltyRatio = (int) ($existing['loyalty_ratio'] ?? 10000);
+            $currency = (string) ($existing['currency'] ?? 'IDR');
+
+            $this->pdo()->beginTransaction();
+            try {
+                if ($existing !== null) {
+                    $this->dbExecute(
+                        "UPDATE business_settings
+                         SET business_name = :business_name,
+                             business_hours = :business_hours,
+                             address = :address,
+                             notification_channel = :notification_channel,
+                             timezone = :timezone,
+                             hours_schedule_json = :hours_schedule_json
+                         WHERE id = :id",
+                        [
+                            'id' => (int) $existing['id'],
+                            'business_name' => $businessName,
+                            'business_hours' => $hours,
+                            'address' => $address !== '' ? $address : null,
+                            'notification_channel' => $notificationChannel !== '' ? $notificationChannel : null,
+                            'timezone' => $timezone,
+                            'hours_schedule_json' => json_encode($schedule, JSON_UNESCAPED_UNICODE),
+                        ]
+                    );
+                } else {
+                    $this->dbExecute(
+                        "INSERT INTO business_settings (business_name, business_hours, address, booking_advance_days, loyalty_ratio, currency, notification_channel, timezone, hours_schedule_json)
+                         VALUES (:business_name, :business_hours, :address, :booking_advance_days, :loyalty_ratio, :currency, :notification_channel, :timezone, :hours_schedule_json)",
+                        [
+                            'business_name' => $businessName,
+                            'business_hours' => $hours,
+                            'address' => $address !== '' ? $address : null,
+                            'booking_advance_days' => $bookingAdvanceDays,
+                            'loyalty_ratio' => $loyaltyRatio,
+                            'currency' => $currency,
+                            'notification_channel' => $notificationChannel !== '' ? $notificationChannel : null,
+                            'timezone' => $timezone,
+                            'hours_schedule_json' => json_encode($schedule, JSON_UNESCAPED_UNICODE),
+                        ]
+                    );
+                }
+
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => 'Memperbarui profil salon',
+                    ]
+                );
+
+                $this->pdo()->commit();
+            } catch (\Throwable $throwable) {
+                $this->pdo()->rollBack();
+
+                return ['success' => false, 'message' => 'Gagal menyimpan profil salon: ' . $throwable->getMessage()];
+            }
+
+            return ['success' => true, 'message' => 'Profil salon berhasil diperbarui.'];
+        }
+
+        $_SESSION['starstyle']['settings'] = array_merge($this->getSettings(), [
+            'business_name' => $businessName,
+            'hours' => $hours,
+            'address' => $address,
+            'notification_channel' => $notificationChannel,
+            'timezone' => $timezone,
+            'hours_schedule' => $schedule,
+        ]);
+        $_SESSION['starstyle']['activity_logs'][] = [
+            'time' => date('Y-m-d H:i:s'),
+            'actor' => $actorName,
+            'action' => 'Memperbarui profil salon',
+        ];
+
+        return ['success' => true, 'message' => 'Profil salon berhasil diperbarui.'];
     }
 
     public function updateStaffPermissions(int $staffId, array $grantedPermissions, string $actorName): void
@@ -1995,6 +3598,557 @@ final class SalonRepository
         }
 
         return array_values(array_filter($this->getServices(), fn (array $service): bool => in_array($staffId, $service['staff_ids'], true)));
+    }
+
+    public function saveServiceGroup(?int $groupId, array $payload, string $actorName): array
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penyimpanan grup layanan membutuhkan koneksi database.');
+        }
+
+        $this->ensureServiceCatalogSchema();
+        $record = $this->normalizeServiceGroupPayload($payload);
+        if ($record['name'] === '') {
+            throw new \InvalidArgumentException('Nama grup layanan wajib diisi.');
+        }
+
+        if ($groupId === null) {
+            $this->dbExecute(
+                "INSERT INTO service_groups (name, description, color, image_data_url)
+                 VALUES (:name, :description, :color, :image_data_url)",
+                $record
+            );
+            $groupId = (int) $this->pdo()->lastInsertId();
+        } else {
+            $this->dbExecute(
+                "UPDATE service_groups
+                 SET name = :name,
+                     description = :description,
+                     color = :color,
+                     image_data_url = :image_data_url
+                 WHERE id = :id",
+                $record + ['id' => $groupId]
+            );
+        }
+
+        $group = $this->dbOne(
+            "SELECT id, name, description, color, image_data_url
+             FROM service_groups
+             WHERE id = :id
+             LIMIT 1",
+            ['id' => $groupId]
+        );
+
+        return [
+            'id' => (int) ($group['id'] ?? $groupId),
+            'name' => (string) ($group['name'] ?? $record['name']),
+            'description' => (string) ($group['description'] ?? $record['description'] ?? ''),
+            'color' => (string) ($group['color'] ?? $record['color']),
+            'image_data_url' => (string) ($group['image_data_url'] ?? $record['image_data_url'] ?? ''),
+        ];
+    }
+
+    public function deleteServiceGroup(int $groupId, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penghapusan grup layanan membutuhkan koneksi database.');
+        }
+
+        $this->ensureServiceCatalogSchema();
+        if ($groupId <= 0) {
+            throw new \InvalidArgumentException('Grup layanan tidak valid.');
+        }
+
+        $activeServices = (int) (($this->dbOne(
+            "SELECT COUNT(*) AS aggregate
+             FROM services
+             WHERE group_id = :group_id AND deleted_at IS NULL",
+            ['group_id' => $groupId]
+        )['aggregate'] ?? 0));
+        if ($activeServices > 0) {
+            throw new \RuntimeException('Grup layanan masih dipakai oleh layanan aktif.');
+        }
+
+        $activePackages = (int) (($this->dbOne(
+            "SELECT COUNT(*) AS aggregate
+             FROM service_packages
+             WHERE group_id = :group_id",
+            ['group_id' => $groupId]
+        )['aggregate'] ?? 0));
+        if ($activePackages > 0) {
+            throw new \RuntimeException('Grup layanan masih dipakai oleh paket layanan.');
+        }
+
+        $this->dbExecute("DELETE FROM service_groups WHERE id = :id", ['id' => $groupId]);
+    }
+
+    public function saveService(?int $serviceId, array $payload, string $actorName): array
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penyimpanan layanan membutuhkan koneksi database.');
+        }
+
+        $this->ensureServiceCatalogSchema();
+        $record = $this->normalizeServicePayload($payload);
+        if ($record['name'] === '') {
+            throw new \InvalidArgumentException('Nama layanan wajib diisi.');
+        }
+
+        $this->pdo()->beginTransaction();
+
+        try {
+            if ($serviceId === null) {
+                $this->dbExecute(
+                    "INSERT INTO services (
+                        group_id, name, duration_minutes, base_price, status, description, audience_json, image_data_url,
+                        online_bookable, commission_enabled, at_customer_location, extra_time_type, extra_time_minutes
+                    ) VALUES (
+                        :group_id, :name, :duration_minutes, :base_price, :status, :description, :audience_json, :image_data_url,
+                        :online_bookable, :commission_enabled, :at_customer_location, :extra_time_type, :extra_time_minutes
+                    )",
+                    $record
+                );
+                $serviceId = (int) $this->pdo()->lastInsertId();
+            } else {
+                $this->dbExecute(
+                    "UPDATE services
+                     SET group_id = :group_id,
+                         name = :name,
+                         duration_minutes = :duration_minutes,
+                         base_price = :base_price,
+                         status = :status,
+                         description = :description,
+                         audience_json = :audience_json,
+                         image_data_url = :image_data_url,
+                         online_bookable = :online_bookable,
+                         commission_enabled = :commission_enabled,
+                         at_customer_location = :at_customer_location,
+                         extra_time_type = :extra_time_type,
+                         extra_time_minutes = :extra_time_minutes
+                     WHERE id = :id",
+                    $record + ['id' => $serviceId]
+                );
+            }
+
+            $this->dbExecute("DELETE FROM service_variants WHERE service_id = :service_id", ['service_id' => $serviceId]);
+            foreach ($record['variants_raw'] as $variant) {
+                $this->dbExecute(
+                    "INSERT INTO service_variants (
+                        service_id, variant_name, duration_minutes, price, special_price, location_pricing_json,
+                        cost_price, cost_products_json, availability_json
+                    ) VALUES (
+                        :service_id, :variant_name, :duration_minutes, :price, :special_price, :location_pricing_json,
+                        :cost_price, :cost_products_json, :availability_json
+                    )",
+                    [
+                        'service_id' => $serviceId,
+                        'variant_name' => $variant['variant_name'],
+                        'duration_minutes' => $variant['duration_minutes'],
+                        'price' => $variant['price'],
+                        'special_price' => $variant['special_price'],
+                        'location_pricing_json' => $variant['location_pricing_json'],
+                        'cost_price' => $variant['cost_price'],
+                        'cost_products_json' => $variant['cost_products_json'],
+                        'availability_json' => $variant['availability_json'],
+                    ]
+                );
+            }
+
+            $this->dbExecute("DELETE FROM staff_skills WHERE service_id = :service_id", ['service_id' => $serviceId]);
+            foreach ($record['staff_ids_raw'] as $staffId) {
+                $this->dbExecute(
+                    "INSERT INTO staff_skills (staff_id, service_id)
+                     VALUES (:staff_id, :service_id)",
+                    [
+                        'staff_id' => $staffId,
+                        'service_id' => $serviceId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
+
+        foreach ($this->getServices() as $service) {
+            if ((int) $service['id'] === (int) $serviceId) {
+                return $service;
+            }
+        }
+
+        throw new \RuntimeException('Layanan gagal dimuat ulang setelah disimpan.');
+    }
+
+    public function deleteService(int $serviceId, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penghapusan layanan membutuhkan koneksi database.');
+        }
+
+        if ($serviceId <= 0) {
+            throw new \InvalidArgumentException('Layanan tidak valid.');
+        }
+
+        $this->pdo()->beginTransaction();
+
+        try {
+            $this->dbExecute(
+                "UPDATE services
+                 SET deleted_at = NOW()
+                 WHERE id = :id",
+                ['id' => $serviceId]
+            );
+            $this->dbExecute("DELETE FROM staff_skills WHERE service_id = :service_id", ['service_id' => $serviceId]);
+            $this->dbExecute("DELETE FROM service_package_items WHERE service_id = :service_id", ['service_id' => $serviceId]);
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
+    }
+
+    public function saveServicePackage(?int $packageId, array $payload, string $actorName): array
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penyimpanan paket layanan membutuhkan koneksi database.');
+        }
+
+        $this->ensureServiceCatalogSchema();
+        $record = $this->normalizeServicePackagePayload($payload);
+        if ($record['name'] === '') {
+            throw new \InvalidArgumentException('Nama paket layanan wajib diisi.');
+        }
+
+        $this->pdo()->beginTransaction();
+
+        try {
+            if ($packageId === null) {
+                $this->dbExecute(
+                    "INSERT INTO service_packages (
+                        group_id, name, package_price, description, pricing_mode, discount_value, audience, image_data_url, items_json
+                    ) VALUES (
+                        :group_id, :name, :package_price, :description, :pricing_mode, :discount_value, :audience, :image_data_url, :items_json
+                    )",
+                    $record
+                );
+                $packageId = (int) $this->pdo()->lastInsertId();
+            } else {
+                $this->dbExecute(
+                    "UPDATE service_packages
+                     SET group_id = :group_id,
+                         name = :name,
+                         package_price = :package_price,
+                         description = :description,
+                         pricing_mode = :pricing_mode,
+                         discount_value = :discount_value,
+                         audience = :audience,
+                         image_data_url = :image_data_url,
+                         items_json = :items_json
+                     WHERE id = :id",
+                    $record + ['id' => $packageId]
+                );
+            }
+
+            $this->dbExecute("DELETE FROM service_package_items WHERE package_id = :package_id", ['package_id' => $packageId]);
+            foreach ($record['service_item_ids'] as $serviceItemId) {
+                $this->dbExecute(
+                    "INSERT INTO service_package_items (package_id, service_id)
+                     VALUES (:package_id, :service_id)",
+                    [
+                        'package_id' => $packageId,
+                        'service_id' => $serviceItemId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
+
+        foreach ($this->getPackages() as $package) {
+            if ((int) $package['id'] === (int) $packageId) {
+                return $package;
+            }
+        }
+
+        throw new \RuntimeException('Paket layanan gagal dimuat ulang setelah disimpan.');
+    }
+
+    public function deleteServicePackage(int $packageId, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penghapusan paket layanan membutuhkan koneksi database.');
+        }
+
+        if ($packageId <= 0) {
+            throw new \InvalidArgumentException('Paket layanan tidak valid.');
+        }
+
+        $this->pdo()->beginTransaction();
+
+        try {
+            $this->dbExecute("DELETE FROM service_package_items WHERE package_id = :package_id", ['package_id' => $packageId]);
+            $this->dbExecute("DELETE FROM service_packages WHERE id = :id", ['id' => $packageId]);
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
+    }
+
+    public function saveVoucher(?int $voucherId, array $payload, string $actorName): array
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penyimpanan voucher membutuhkan koneksi database.');
+        }
+
+        $this->ensureVoucherCatalogSchema();
+        $record = $this->normalizeVoucherPayload($payload);
+        if ($record['name'] === '') {
+            throw new \InvalidArgumentException('Nama voucher wajib diisi.');
+        }
+
+        if ($record['voucher_type'] === 'service' && $record['service_items_json'] === '[]') {
+            throw new \InvalidArgumentException('Pilih minimal satu layanan untuk voucher layanan.');
+        }
+
+        $current = $voucherId !== null
+            ? $this->dbOne("SELECT id, code FROM vouchers WHERE id = :id AND deleted_at IS NULL LIMIT 1", ['id' => $voucherId])
+            : null;
+        $record['code'] = (string) ($current['code'] ?? $this->generateVoucherCode($record['voucher_type']));
+
+        $this->pdo()->beginTransaction();
+        try {
+            if ($voucherId === null) {
+                $this->dbExecute(
+                    "INSERT INTO vouchers (
+                        voucher_type, name, code, value, price_value, usage_limit, used_count, expired_at, status,
+                        location_name, message_text, service_items_json, combine_quantity, max_quantity, expiry_mode, expiry_value,
+                        created_at, updated_at, deleted_at
+                    ) VALUES (
+                        :voucher_type, :name, :code, :value, :price_value, :usage_limit, 0, :expired_at, :status,
+                        :location_name, :message_text, :service_items_json, :combine_quantity, :max_quantity, :expiry_mode, :expiry_value,
+                        NOW(), NOW(), NULL
+                    )",
+                    $record
+                );
+                $voucherId = (int) $this->pdo()->lastInsertId();
+            } else {
+                $this->dbExecute(
+                    "UPDATE vouchers
+                     SET voucher_type = :voucher_type,
+                         name = :name,
+                         value = :value,
+                         price_value = :price_value,
+                         usage_limit = :usage_limit,
+                         expired_at = :expired_at,
+                         status = :status,
+                         location_name = :location_name,
+                         message_text = :message_text,
+                         service_items_json = :service_items_json,
+                         combine_quantity = :combine_quantity,
+                         max_quantity = :max_quantity,
+                         expiry_mode = :expiry_mode,
+                         expiry_value = :expiry_value,
+                         updated_at = NOW()
+                     WHERE id = :id AND deleted_at IS NULL",
+                    $record + ['id' => $voucherId]
+                );
+            }
+
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => ($current === null ? 'Menambah' : 'Memperbarui') . ' voucher #' . $voucherId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
+
+        return $this->findVoucherRow($voucherId) ?? throw new \RuntimeException('Voucher gagal dimuat ulang setelah disimpan.');
+    }
+
+    public function deleteVoucher(int $voucherId, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penghapusan voucher membutuhkan koneksi database.');
+        }
+
+        if ($voucherId <= 0) {
+            throw new \InvalidArgumentException('Voucher tidak valid.');
+        }
+
+        $voucher = $this->dbOne("SELECT id FROM vouchers WHERE id = :id AND deleted_at IS NULL LIMIT 1", ['id' => $voucherId]);
+        if ($voucher === null) {
+            throw new \InvalidArgumentException('Voucher tidak ditemukan.');
+        }
+
+        $this->pdo()->beginTransaction();
+        try {
+            $this->dbExecute(
+                "UPDATE vouchers
+                 SET deleted_at = NOW(), status = 'Nonaktif', updated_at = NOW()
+                 WHERE id = :id",
+                ['id' => $voucherId]
+            );
+
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => 'Menghapus voucher #' . $voucherId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
+    }
+
+    public function saveVoucherDiscount(?int $discountId, array $payload, string $actorName): array
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penyimpanan diskon membutuhkan koneksi database.');
+        }
+
+        $this->ensureVoucherCatalogSchema();
+        $record = $this->normalizeVoucherDiscountPayload($payload);
+        if ($record['name'] === '') {
+            throw new \InvalidArgumentException('Nama diskon wajib diisi.');
+        }
+
+        $current = $discountId !== null
+            ? $this->dbOne("SELECT id FROM voucher_discounts WHERE id = :id AND deleted_at IS NULL LIMIT 1", ['id' => $discountId])
+            : null;
+
+        $this->pdo()->beginTransaction();
+        try {
+            if ($discountId === null) {
+                $this->dbExecute(
+                    "INSERT INTO voucher_discounts (
+                        name, mode, amount_value, max_discount_value, scopes_json, status, created_at, updated_at, deleted_at
+                    ) VALUES (
+                        :name, :mode, :amount_value, :max_discount_value, :scopes_json, :status, NOW(), NOW(), NULL
+                    )",
+                    $record
+                );
+                $discountId = (int) $this->pdo()->lastInsertId();
+            } else {
+                $this->dbExecute(
+                    "UPDATE voucher_discounts
+                     SET name = :name,
+                         mode = :mode,
+                         amount_value = :amount_value,
+                         max_discount_value = :max_discount_value,
+                         scopes_json = :scopes_json,
+                         status = :status,
+                         updated_at = NOW()
+                     WHERE id = :id AND deleted_at IS NULL",
+                    $record + ['id' => $discountId]
+                );
+            }
+
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => ($current === null ? 'Menambah' : 'Memperbarui') . ' diskon voucher #' . $discountId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
+
+        return $this->findVoucherDiscountRow($discountId) ?? throw new \RuntimeException('Diskon gagal dimuat ulang setelah disimpan.');
+    }
+
+    public function deleteVoucherDiscount(int $discountId, string $actorName): void
+    {
+        if (!$this->usingDb()) {
+            throw new \RuntimeException('Penghapusan diskon membutuhkan koneksi database.');
+        }
+
+        if ($discountId <= 0) {
+            throw new \InvalidArgumentException('Diskon tidak valid.');
+        }
+
+        $discount = $this->dbOne("SELECT id FROM voucher_discounts WHERE id = :id AND deleted_at IS NULL LIMIT 1", ['id' => $discountId]);
+        if ($discount === null) {
+            throw new \InvalidArgumentException('Diskon tidak ditemukan.');
+        }
+
+        $this->pdo()->beginTransaction();
+        try {
+            $this->dbExecute(
+                "UPDATE voucher_discounts
+                 SET deleted_at = NOW(), status = 'Nonaktif', updated_at = NOW()
+                 WHERE id = :id",
+                ['id' => $discountId]
+            );
+
+            if ($this->tableExists('activity_logs')) {
+                $this->dbExecute(
+                    "INSERT INTO activity_logs (user_id, actor_name, action_text, created_at)
+                     VALUES (NULL, :actor_name, :action_text, NOW())",
+                    [
+                        'actor_name' => $actorName,
+                        'action_text' => 'Menghapus diskon voucher #' . $discountId,
+                    ]
+                );
+            }
+
+            $this->pdo()->commit();
+        } catch (\Throwable $throwable) {
+            if ($this->pdo()->inTransaction()) {
+                $this->pdo()->rollBack();
+            }
+
+            throw $throwable;
+        }
     }
 
     public function findCustomer(int $customerId): ?array
@@ -3838,6 +5992,353 @@ final class SalonRepository
         return (new \DateTimeImmutable($dateTime))->format('d M Y, H:i');
     }
 
+    private function analyticsTransactionNetTotal(array $transaction): float
+    {
+        $gross = array_reduce(
+            $transaction['items'] ?? [],
+            static fn (float $sum, array $item): float => $sum + (((float) ($item['qty'] ?? 0)) * ((float) ($item['price'] ?? 0))),
+            0.0
+        );
+
+        return max(0, $gross - (float) ($transaction['discount'] ?? 0) + (float) ($transaction['rounding'] ?? 0));
+    }
+
+    private function percentChange(float $current, float $previous): float
+    {
+        if (abs($previous) < 0.00001) {
+            return $current > 0 ? 100.0 : 0.0;
+        }
+
+        return (($current - $previous) / abs($previous)) * 100;
+    }
+
+    private function formatSignedPercent(float $value): string
+    {
+        $rounded = round($value);
+        if ($rounded > 0) {
+            return '+' . $rounded . '%';
+        }
+
+        return $rounded . '%';
+    }
+
+    private function calendarResourceRows(array $locations): array
+    {
+        return array_values(array_map(static function (array $location): array {
+            return [
+                'id' => 'location-' . (int) ($location['id'] ?? 0),
+                'name' => (string) ($location['name'] ?? 'Star Salon'),
+            ];
+        }, $locations));
+    }
+
+    private function calendarDiscountRows(array $discounts): array
+    {
+        return array_values(array_map(static function (array $discount): array {
+            return [
+                'id' => (int) ($discount['id'] ?? 0),
+                'name' => (string) ($discount['name'] ?? 'Diskon'),
+                'mode' => (string) ($discount['mode'] ?? 'amount'),
+                'amount' => (float) ($discount['amount_value'] ?? 0),
+                'amount_label' => (string) ($discount['amount_label'] ?? ''),
+                'max_discount' => (float) ($discount['max_discount_value'] ?? 0),
+            ];
+        }, $discounts));
+    }
+
+    private function calendarOwnedVoucherRows(array $customers, array $vouchers): array
+    {
+        $customerNamesById = [];
+        foreach ($customers as $customer) {
+            $customerNamesById[(int) ($customer['id'] ?? 0)] = (string) ($customer['name'] ?? 'Pelanggan');
+        }
+
+        $vouchersById = [];
+        $vouchersByName = [];
+        foreach ($vouchers as $voucher) {
+            $voucherId = (int) ($voucher['id'] ?? 0);
+            if ($voucherId > 0) {
+                $vouchersById[$voucherId] = $voucher;
+            }
+            $vouchersByName[$this->calendarMatchKey((string) ($voucher['name'] ?? ''))] = $voucher;
+        }
+
+        $sales = [];
+        foreach ($this->getTransactions() as $transaction) {
+            $customerId = (int) ($transaction['customer_id'] ?? 0);
+            if ($customerId <= 0) {
+                continue;
+            }
+
+            foreach ((array) ($transaction['items'] ?? []) as $item) {
+                if (($item['type'] ?? '') !== 'voucher') {
+                    continue;
+                }
+
+                $voucher = $vouchersByName[$this->calendarMatchKey((string) ($item['name'] ?? ''))] ?? null;
+                if (!is_array($voucher)) {
+                    continue;
+                }
+
+                $voucherId = (int) ($voucher['id'] ?? 0);
+                if ($voucherId <= 0) {
+                    continue;
+                }
+
+                $key = $customerId . ':' . $voucherId;
+                if (!isset($sales[$key])) {
+                    $sales[$key] = [
+                        'customer_id' => $customerId,
+                        'voucher' => $voucher,
+                        'qty' => 0,
+                    ];
+                }
+                $sales[$key]['qty'] += max(1, (int) ($item['qty'] ?? 1));
+            }
+        }
+
+        $redemptionCount = [];
+        if ($this->usingDb() && $this->tableExists('voucher_redemptions')) {
+            foreach ($this->dbAll(
+                "SELECT customer_id, voucher_id, COUNT(*) AS total
+                 FROM voucher_redemptions
+                 GROUP BY customer_id, voucher_id"
+            ) as $row) {
+                $redemptionCount[(int) $row['customer_id'] . ':' . (int) $row['voucher_id']] = (int) ($row['total'] ?? 0);
+            }
+        }
+
+        $rows = [];
+        foreach ($sales as $sale) {
+            $voucher = $sale['voucher'];
+            $voucherId = (int) ($voucher['id'] ?? 0);
+            $customerId = (int) $sale['customer_id'];
+            $key = $customerId . ':' . $voucherId;
+            $total = max(0, (int) ($sale['qty'] ?? 0));
+            $used = max(0, (int) ($redemptionCount[$key] ?? 0));
+            $remaining = max(0, $total - $used);
+            $type = (string) ($voucher['type'] ?? 'gift');
+            $serviceNames = json_decode((string) ($voucher['services_json'] ?? '[]'), true);
+            $serviceNames = is_array($serviceNames)
+                ? array_values(array_filter(array_map(static fn (array $item): string => trim((string) ($item['name'] ?? '')), $serviceNames)))
+                : [];
+            $rows[] = [
+                'id' => 'owned-' . $customerId . '-' . $voucherId,
+                'owner' => (string) ($customerNamesById[$customerId] ?? 'Pelanggan'),
+                'type' => $type,
+                'type_label' => $type === 'gift' ? 'Gift Voucher' : 'Service Voucher',
+                'name' => (string) ($voucher['name'] ?? 'Voucher'),
+                'service_label' => (string) (($voucher['service_name'] ?? '') ?: implode(', ', $serviceNames)),
+                'service_names' => $serviceNames,
+                'remaining' => $remaining,
+                'total' => $total,
+                'remaining_value' => $type === 'gift' ? $remaining * (float) ($voucher['editor_value'] ?? 0) : 0,
+                'expiry_date' => (string) ($voucher['expired_at'] ?? ''),
+                'location' => (string) ($voucher['location'] ?? 'Star Salon'),
+                'code' => (string) ($voucher['code'] ?? ''),
+                'status' => $remaining > 0 ? 'active' : 'used',
+            ];
+        }
+
+        usort($rows, static fn (array $left, array $right): int => strcmp((string) ($left['owner'] ?? ''), (string) ($right['owner'] ?? '')));
+
+        return $rows;
+    }
+
+    private function calendarSalesServiceRows(array $services): array
+    {
+        return array_values(array_map(function (array $service): array {
+            return [
+                'id' => (string) ($service['id'] ?? ''),
+                'kind' => 'service',
+                'name' => (string) ($service['name'] ?? 'Layanan'),
+                'price' => (float) ($service['price'] ?? 0),
+                'duration' => (int) ($service['duration'] ?? 0),
+                'category' => $this->calendarServiceCategory($service),
+                'category_label' => $this->calendarServiceCategoryLabel($this->calendarServiceCategory($service)),
+                'initials' => $this->calendarInitials((string) ($service['name'] ?? 'SV')),
+                'gender' => $this->calendarGenderFromAudience((array) ($service['audience'] ?? [])),
+            ];
+        }, $services));
+    }
+
+    private function calendarSalesPackageRows(array $packages, array $services): array
+    {
+        $servicesByName = [];
+        foreach ($services as $service) {
+            $servicesByName[$this->calendarMatchKey((string) ($service['name'] ?? ''))] = $service;
+        }
+
+        return array_values(array_map(function (array $package) use ($servicesByName): array {
+            $duration = 0;
+            foreach ((array) ($package['items_detail'] ?? []) as $item) {
+                if (($item['type'] ?? 'service') !== 'service') {
+                    continue;
+                }
+                $service = $servicesByName[$this->calendarMatchKey((string) ($item['name'] ?? ''))] ?? null;
+                if (!is_array($service)) {
+                    continue;
+                }
+                $duration += max(1, (int) ($item['qty'] ?? 1)) * (int) ($service['duration'] ?? 0);
+            }
+
+            return [
+                'id' => (string) ($package['id'] ?? ''),
+                'kind' => 'package',
+                'name' => (string) ($package['name'] ?? 'Package'),
+                'description' => (string) ($package['description'] ?? implode(', ', (array) ($package['items'] ?? []))),
+                'price' => (float) ($package['price'] ?? 0),
+                'duration' => $duration,
+                'category' => 'hair-cut',
+                'category_label' => 'Hair Cut',
+            ];
+        }, $packages));
+    }
+
+    private function calendarSalesProductRows(array $products): array
+    {
+        return array_values(array_map(static function (array $product): array {
+            return [
+                'id' => (string) ($product['id'] ?? ''),
+                'kind' => 'product',
+                'name' => (string) ($product['name'] ?? 'Produk'),
+                'variant' => (string) (($product['sku'] ?? '') ?: ($product['category'] ?? 'Default')),
+                'brand' => (string) ($product['brand'] ?? ''),
+                'stock' => (int) ($product['stock'] ?? 0),
+                'price' => (float) ($product['price'] ?? 0),
+                'category' => 'all',
+                'category_label' => 'Semua',
+            ];
+        }, $products));
+    }
+
+    private function calendarSalesVoucherRows(array $vouchers): array
+    {
+        return array_values(array_map(function (array $voucher): array {
+            $type = (string) ($voucher['type'] ?? 'gift');
+            return [
+                'id' => (string) ($voucher['id'] ?? ''),
+                'kind' => 'voucher',
+                'voucher_kind' => $type,
+                'name' => (string) ($voucher['name'] ?? 'Voucher'),
+                'subtitle' => (string) (($voucher['expiry_label'] ?? '') ?: ($voucher['duration'] ?? '')),
+                'price' => (float) ($voucher['price_value'] ?? $voucher['editor_value'] ?? 0),
+                'badge' => $type === 'gift' ? 'G' : ($type === 'class' ? 'C' : 'S'),
+                'badge_color' => $type === 'gift' ? 'green' : 'yellow',
+                'category' => $type,
+            ];
+        }, $vouchers));
+    }
+
+    private function calendarPayableRows(): array
+    {
+        $rows = [];
+
+        if ($this->usingDb() && $this->tableExists('invoices') && $this->tableExists('transactions')) {
+            $joinCustomers = $this->tableExists('customers');
+            foreach ($this->dbAll(
+                "SELECT i.id, i.status, i.issued_at, t.reference, t.customer_id,
+                        COALESCE(SUM(ti.quantity * ti.price), 0) - t.discount_amount + t.rounding_amount AS amount"
+                . ($joinCustomers ? ", c.name AS customer_name" : ", NULL AS customer_name") . "
+                 FROM invoices i
+                 JOIN transactions t ON t.id = i.transaction_id
+                 LEFT JOIN transaction_items ti ON ti.transaction_id = t.id
+                 " . ($joinCustomers ? "LEFT JOIN customers c ON c.id = t.customer_id" : "") . "
+                 WHERE LOWER(i.status) <> 'paid'
+                 GROUP BY i.id, i.status, i.issued_at, t.reference, t.customer_id" . ($joinCustomers ? ", c.name" : "") . "
+                 ORDER BY i.issued_at DESC"
+            ) as $row) {
+                $rows[] = [
+                    'id' => 'payable-' . (int) $row['id'],
+                    'kind' => 'payable',
+                    'customer' => (string) (($row['customer_name'] ?? '') ?: 'Walk-In'),
+                    'date' => $this->formatCalendarCatalogDate((string) ($row['issued_at'] ?? '')),
+                    'amount' => (float) ($row['amount'] ?? 0),
+                    'qty' => 1,
+                    'badge' => strtoupper((string) ($row['status'] ?? 'NEW')),
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    private function calendarServiceCategory(array $service): string
+    {
+        $name = strtolower((string) ($service['name'] ?? ''));
+        $groupId = (int) ($service['group_id'] ?? 0);
+
+        if ($groupId === 2 || str_contains($name, 'color') || str_contains($name, 'balayage') || str_contains($name, 'cat rambut')) {
+            return 'hair-coloring';
+        }
+
+        if ($groupId === 3 || str_contains($name, 'spa') || str_contains($name, 'repair') || str_contains($name, 'treatment') || str_contains($name, 'creambath')) {
+            return 'hair-treatment';
+        }
+
+        return 'hair-cut';
+    }
+
+    private function calendarServiceCategoryLabel(string $category): string
+    {
+        return match ($category) {
+            'hair-coloring' => 'Hair Coloring',
+            'hair-treatment' => 'Hair Treatment',
+            default => 'Hair Cut',
+        };
+    }
+
+    private function calendarGenderFromAudience(array $audience): ?string
+    {
+        $normalized = array_map(static fn (mixed $value): string => strtolower(trim((string) $value)), $audience);
+        $normalized = array_values(array_filter($normalized));
+        if ($normalized === ['men'] || $normalized === ['male']) {
+            return 'male';
+        }
+        if ($normalized === ['women'] || $normalized === ['female']) {
+            return 'female';
+        }
+
+        return null;
+    }
+
+    private function calendarInitials(string $value): string
+    {
+        $words = preg_split('/\s+/', trim($value)) ?: [];
+        $letters = '';
+        foreach ($words as $word) {
+            if ($word === '') {
+                continue;
+            }
+            $letters .= strtoupper(substr($word, 0, 1));
+            if (strlen($letters) >= 2) {
+                break;
+            }
+        }
+
+        return $letters !== '' ? $letters : 'SV';
+    }
+
+    private function calendarMatchKey(string $value): string
+    {
+        $normalized = strtolower(trim($value));
+        $normalized = str_replace(['()', '-'], '', $normalized);
+        return preg_replace('/\s+/', ' ', $normalized) ?: $normalized;
+    }
+
+    private function formatCalendarCatalogDate(string $value): string
+    {
+        if ($value === '') {
+            return '';
+        }
+
+        try {
+            return (new \DateTimeImmutable($value))->format('d M Y');
+        } catch (\Throwable) {
+            return $value;
+        }
+    }
+
     private function rankItems(string $type): array
     {
         $bucket = [];
@@ -3941,9 +6442,160 @@ final class SalonRepository
         return false;
     }
 
+    private function ensureCustomerSchema(): void
+    {
+        if (!$this->usingDb() || $this->customerSchemaEnsured || !$this->tableExists('customers')) {
+            return;
+        }
+
+        $columns = [
+            'birthdate' => 'ADD COLUMN birthdate DATE NULL AFTER status',
+            'family_card_number' => 'ADD COLUMN family_card_number VARCHAR(40) NULL AFTER birthdate',
+            'passport_number' => 'ADD COLUMN passport_number VARCHAR(40) NULL AFTER family_card_number',
+            'notify_via' => "ADD COLUMN notify_via VARCHAR(20) NOT NULL DEFAULT 'off' AFTER passport_number",
+            'marketing_opt_in' => 'ADD COLUMN marketing_opt_in TINYINT(1) NOT NULL DEFAULT 0 AFTER notify_via',
+        ];
+
+        foreach ($columns as $column => $definition) {
+            if ($this->columnExists('customers', $column)) {
+                continue;
+            }
+
+            $this->pdo()->exec('ALTER TABLE customers ' . $definition);
+            $this->tableExistsCache = [];
+            $this->columnExistsCache = [];
+        }
+
+        $this->customerSchemaEnsured = true;
+    }
+
+    private function ensureStaffProfileSchema(): void
+    {
+        if (!$this->usingDb() || $this->staffProfileSchemaEnsured || !$this->tableExists('staff')) {
+            return;
+        }
+
+        $columns = [
+            'gender' => 'ADD COLUMN gender VARCHAR(20) NULL AFTER rating',
+            'booking_enabled' => 'ADD COLUMN booking_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER gender',
+            'agenda_color' => "ADD COLUMN agenda_color VARCHAR(20) NOT NULL DEFAULT '#8cc9ff' AFTER booking_enabled",
+            'started_working_on' => 'ADD COLUMN started_working_on DATE NULL AFTER agenda_color',
+            'ended_working_on' => 'ADD COLUMN ended_working_on DATE NULL AFTER started_working_on',
+            'public_title' => 'ADD COLUMN public_title VARCHAR(120) NULL AFTER ended_working_on',
+            'notes' => 'ADD COLUMN notes TEXT NULL AFTER public_title',
+            'instagram_handle' => 'ADD COLUMN instagram_handle VARCHAR(160) NULL AFTER notes',
+            'photo_data_url' => 'ADD COLUMN photo_data_url LONGTEXT NULL AFTER instagram_handle',
+            'commission_rules' => 'ADD COLUMN commission_rules JSON NULL AFTER photo_data_url',
+            'attendance_pose' => "ADD COLUMN attendance_pose VARCHAR(80) NOT NULL DEFAULT 'Right Tilt' AFTER commission_rules",
+            'attendance_uploaded_pose' => 'ADD COLUMN attendance_uploaded_pose VARCHAR(80) NULL AFTER attendance_pose',
+        ];
+
+        foreach ($columns as $column => $definition) {
+            if ($this->columnExists('staff', $column)) {
+                continue;
+            }
+
+            $this->pdo()->exec('ALTER TABLE staff ' . $definition);
+            $this->tableExistsCache = [];
+            $this->columnExistsCache = [];
+        }
+
+        $this->staffProfileSchemaEnsured = true;
+    }
+
+    private function ensureServiceCatalogSchema(): void
+    {
+        if (!$this->usingDb() || $this->serviceCatalogSchemaEnsured) {
+            return;
+        }
+
+        if ($this->tableExists('service_groups')) {
+            $groupColumns = [
+                'color' => "ADD COLUMN color VARCHAR(20) NOT NULL DEFAULT '#76b6e8' AFTER description",
+                'image_data_url' => 'ADD COLUMN image_data_url LONGTEXT NULL AFTER color',
+            ];
+
+            foreach ($groupColumns as $column => $definition) {
+                if ($this->columnExists('service_groups', $column)) {
+                    continue;
+                }
+
+                $this->pdo()->exec('ALTER TABLE service_groups ' . $definition);
+                $this->tableExistsCache = [];
+                $this->columnExistsCache = [];
+            }
+        }
+
+        if ($this->tableExists('services')) {
+            $serviceColumns = [
+                'audience_json' => 'ADD COLUMN audience_json JSON NULL AFTER description',
+                'image_data_url' => 'ADD COLUMN image_data_url LONGTEXT NULL AFTER audience_json',
+                'online_bookable' => 'ADD COLUMN online_bookable TINYINT(1) NOT NULL DEFAULT 1 AFTER image_data_url',
+                'commission_enabled' => 'ADD COLUMN commission_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER online_bookable',
+                'at_customer_location' => 'ADD COLUMN at_customer_location TINYINT(1) NOT NULL DEFAULT 0 AFTER commission_enabled',
+                'extra_time_type' => "ADD COLUMN extra_time_type VARCHAR(40) NOT NULL DEFAULT 'none' AFTER at_customer_location",
+                'extra_time_minutes' => 'ADD COLUMN extra_time_minutes INT NOT NULL DEFAULT 0 AFTER extra_time_type',
+            ];
+
+            foreach ($serviceColumns as $column => $definition) {
+                if ($this->columnExists('services', $column)) {
+                    continue;
+                }
+
+                $this->pdo()->exec('ALTER TABLE services ' . $definition);
+                $this->tableExistsCache = [];
+                $this->columnExistsCache = [];
+            }
+        }
+
+        if ($this->tableExists('service_variants')) {
+            $variantColumns = [
+                'special_price' => 'ADD COLUMN special_price DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER price',
+                'location_pricing_json' => 'ADD COLUMN location_pricing_json JSON NULL AFTER special_price',
+                'cost_price' => 'ADD COLUMN cost_price DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER location_pricing_json',
+                'cost_products_json' => 'ADD COLUMN cost_products_json JSON NULL AFTER cost_price',
+                'availability_json' => 'ADD COLUMN availability_json JSON NULL AFTER cost_products_json',
+            ];
+
+            foreach ($variantColumns as $column => $definition) {
+                if ($this->columnExists('service_variants', $column)) {
+                    continue;
+                }
+
+                $this->pdo()->exec('ALTER TABLE service_variants ' . $definition);
+                $this->tableExistsCache = [];
+                $this->columnExistsCache = [];
+            }
+        }
+
+        if ($this->tableExists('service_packages')) {
+            $packageColumns = [
+                'group_id' => 'ADD COLUMN group_id BIGINT UNSIGNED NULL AFTER id',
+                'pricing_mode' => "ADD COLUMN pricing_mode VARCHAR(20) NOT NULL DEFAULT 'service' AFTER description",
+                'discount_value' => 'ADD COLUMN discount_value DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER pricing_mode',
+                'audience' => "ADD COLUMN audience VARCHAR(20) NOT NULL DEFAULT 'all' AFTER discount_value",
+                'image_data_url' => 'ADD COLUMN image_data_url LONGTEXT NULL AFTER audience',
+                'items_json' => 'ADD COLUMN items_json JSON NULL AFTER image_data_url',
+            ];
+
+            foreach ($packageColumns as $column => $definition) {
+                if ($this->columnExists('service_packages', $column)) {
+                    continue;
+                }
+
+                $this->pdo()->exec('ALTER TABLE service_packages ' . $definition);
+                $this->tableExistsCache = [];
+                $this->columnExistsCache = [];
+            }
+        }
+
+        $this->serviceCatalogSchemaEnsured = true;
+    }
+
     private function resolveCustomer(string $name, string $phone): int
     {
         if ($this->usingDb()) {
+            $this->ensureCustomerSchema();
             $existing = $this->dbOne(
                 "SELECT id
                  FROM customers
@@ -3965,7 +6617,7 @@ final class SalonRepository
                 return (int) $existing['id'];
             }
 
-            $memberId = 'MEM-' . str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT);
+            $memberId = $this->generateCustomerMemberId();
             $this->dbExecute(
                 "INSERT INTO customers (member_id, name, phone, status)
                  VALUES (:member_id, :name, :phone, 'Aktif')",
@@ -3986,5 +6638,1005 @@ final class SalonRepository
         }
 
         return 1;
+    }
+
+    private function syncCustomerContact(int $customerId, string $name, string $phone, string $email): void
+    {
+        if ($customerId <= 0) {
+            return;
+        }
+
+        if ($this->usingDb()) {
+            $this->ensureCustomerSchema();
+            $this->dbExecute(
+                "UPDATE customers
+                 SET name = CASE WHEN :name <> '' THEN :name ELSE name END,
+                     phone = CASE WHEN :phone <> '' THEN :phone ELSE phone END,
+                     email = CASE WHEN :email <> '' THEN :email ELSE email END
+                 WHERE id = :id",
+                [
+                    'id' => $customerId,
+                    'name' => $name,
+                    'phone' => $phone,
+                    'email' => $email,
+                ]
+            );
+            return;
+        }
+
+        foreach ($_SESSION['starstyle']['customers'] as $index => $customer) {
+            if ((int) ($customer['id'] ?? 0) !== $customerId) {
+                continue;
+            }
+
+            if ($name !== '') {
+                $_SESSION['starstyle']['customers'][$index]['name'] = $name;
+            }
+            if ($phone !== '') {
+                $_SESSION['starstyle']['customers'][$index]['phone'] = $phone;
+            }
+            if ($email !== '') {
+                $_SESSION['starstyle']['customers'][$index]['email'] = $email;
+            }
+            break;
+        }
+    }
+
+    private function normalizeServiceGroupPayload(array $payload): array
+    {
+        return [
+            'name' => trim((string) ($payload['name'] ?? '')),
+            'description' => $this->nullIfEmpty((string) ($payload['description'] ?? '')),
+            'color' => trim((string) ($payload['color'] ?? '#76b6e8')) ?: '#76b6e8',
+            'image_data_url' => $this->nullIfEmpty((string) ($payload['image_data_url'] ?? '')),
+        ];
+    }
+
+    private function normalizeServicePayload(array $payload): array
+    {
+        $variants = is_array($payload['variants'] ?? null) ? $payload['variants'] : [];
+        $staffIds = array_values(array_unique(array_map('intval', is_array($payload['staff_ids'] ?? null) ? $payload['staff_ids'] : [])));
+        $audience = array_values(array_unique(array_filter(
+            is_array($payload['audience'] ?? null) ? array_map('strval', $payload['audience']) : [],
+            static fn (string $value): bool => in_array($value, ['Women', 'Men'], true)
+        )));
+        if ($audience === []) {
+            $audience = ['Women', 'Men'];
+        }
+
+        $normalizedVariants = [];
+        foreach ($variants as $variant) {
+            if (!is_array($variant)) {
+                continue;
+            }
+
+            $durationMinutes = max(0, (int) ($variant['duration_minutes'] ?? 0));
+            $price = (float) ($variant['price'] ?? 0);
+            $specialPrice = (float) ($variant['special_price'] ?? 0);
+            $variantName = trim((string) ($variant['variant_name'] ?? ''));
+            $locationPricing = is_array($variant['location_pricing'] ?? null) ? $variant['location_pricing'] : null;
+            $costProducts = is_array($variant['cost_products'] ?? null) ? $variant['cost_products'] : [];
+            $availability = is_array($variant['availability'] ?? null) ? $variant['availability'] : null;
+
+            if ($variantName === '' && $durationMinutes === 0 && $price <= 0 && $specialPrice <= 0) {
+                continue;
+            }
+
+            $normalizedVariants[] = [
+                'variant_name' => $variantName,
+                'duration_minutes' => $durationMinutes,
+                'price' => $price,
+                'special_price' => $specialPrice,
+                'location_pricing_json' => json_encode($locationPricing, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'cost_price' => (float) ($variant['cost_price'] ?? 0),
+                'cost_products_json' => json_encode($costProducts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'availability_json' => json_encode($availability, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            ];
+        }
+
+        if ($normalizedVariants === []) {
+            $normalizedVariants[] = [
+                'variant_name' => '',
+                'duration_minutes' => max(0, (int) ($payload['duration_minutes'] ?? 0)),
+                'price' => (float) ($payload['base_price'] ?? 0),
+                'special_price' => 0.0,
+                'location_pricing_json' => json_encode(null),
+                'cost_price' => 0.0,
+                'cost_products_json' => json_encode([], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'availability_json' => json_encode(null),
+            ];
+        }
+
+        $primaryVariant = $normalizedVariants[0];
+        $extraTimeType = (string) ($payload['extra_time_type'] ?? 'none');
+        if (!in_array($extraTimeType, ['none', 'processing_after', 'blocked_after'], true)) {
+            $extraTimeType = 'none';
+        }
+
+        return [
+            'group_id' => max(1, (int) ($payload['group_id'] ?? 1)),
+            'name' => trim((string) ($payload['name'] ?? '')),
+            'duration_minutes' => (int) ($primaryVariant['duration_minutes'] ?? 0),
+            'base_price' => (float) ($primaryVariant['price'] ?? 0),
+            'status' => trim((string) ($payload['status'] ?? 'Aktif')) ?: 'Aktif',
+            'description' => $this->nullIfEmpty((string) ($payload['description'] ?? '')),
+            'audience_json' => json_encode($audience, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'image_data_url' => $this->nullIfEmpty((string) ($payload['image_data_url'] ?? '')),
+            'online_bookable' => !empty($payload['online_bookable']) ? 1 : 0,
+            'commission_enabled' => !empty($payload['commission_enabled']) ? 1 : 0,
+            'at_customer_location' => !empty($payload['at_customer_location']) ? 1 : 0,
+            'extra_time_type' => $extraTimeType,
+            'extra_time_minutes' => max(0, (int) ($payload['extra_time_minutes'] ?? 0)),
+            'variants_raw' => $normalizedVariants,
+            'staff_ids_raw' => array_values(array_filter($staffIds, static fn (int $staffId): bool => $staffId > 0)),
+        ];
+    }
+
+    private function normalizeServicePackagePayload(array $payload): array
+    {
+        $items = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+        $normalizedItems = [];
+        $serviceItemIds = [];
+
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $type = (string) ($item['type'] ?? 'service');
+            $itemId = (string) ($item['id'] ?? '');
+            $qty = max(1, (int) ($item['qty'] ?? 1));
+            $extraTimeType = (string) ($item['extraTimeType'] ?? 'none');
+            if (!in_array($extraTimeType, ['none', 'processing_after', 'blocked_after'], true)) {
+                $extraTimeType = 'none';
+            }
+
+            $normalizedItems[] = [
+                'key' => (string) ($item['key'] ?? ($type . '-' . $itemId . '-' . count($normalizedItems))),
+                'type' => $type,
+                'id' => $itemId,
+                'name' => trim((string) ($item['name'] ?? '')),
+                'price' => (float) ($item['price'] ?? 0),
+                'duration' => (string) ($item['duration'] ?? ''),
+                'brand' => (string) ($item['brand'] ?? ''),
+                'stock' => (int) ($item['stock'] ?? 0),
+                'groupId' => (string) ($item['groupId'] ?? ''),
+                'groupName' => (string) ($item['groupName'] ?? ''),
+                'qty' => $qty,
+                'extraTimeType' => $extraTimeType,
+                'extraTimeMinutes' => max(0, (int) ($item['extraTimeMinutes'] ?? 0)),
+            ];
+
+            if ($type === 'service' && ctype_digit($itemId)) {
+                $serviceItemIds[] = (int) $itemId;
+            }
+        }
+
+        return [
+            'group_id' => ($groupId = (int) ($payload['group_id'] ?? 0)) > 0 ? $groupId : null,
+            'name' => trim((string) ($payload['name'] ?? '')),
+            'package_price' => (float) ($payload['package_price'] ?? 0),
+            'description' => $this->nullIfEmpty((string) ($payload['description'] ?? '')),
+            'pricing_mode' => trim((string) ($payload['pricing_mode'] ?? 'service')) ?: 'service',
+            'discount_value' => (float) ($payload['discount_value'] ?? 0),
+            'audience' => trim((string) ($payload['audience'] ?? 'all')) ?: 'all',
+            'image_data_url' => $this->nullIfEmpty((string) ($payload['image_data_url'] ?? '')),
+            'items_json' => json_encode($normalizedItems, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'service_item_ids' => array_values(array_unique(array_filter($serviceItemIds, static fn (int $serviceId): bool => $serviceId > 0))),
+        ];
+    }
+
+    private function normalizeStaffPayload(array $payload): array
+    {
+        $serviceIds = array_values(array_unique(array_map('intval', is_array($payload['service_ids'] ?? null) ? $payload['service_ids'] : [])));
+        $commissionRules = $payload['commission_rules'] ?? '{}';
+        if (is_string($commissionRules)) {
+            $decoded = json_decode($commissionRules, true);
+            $commissionRules = is_array($decoded) ? $decoded : [];
+        }
+
+        return [
+            'location_id' => max(1, (int) ($payload['location_id'] ?? 1)),
+            'name' => trim((string) ($payload['name'] ?? '')),
+            'email' => $this->nullIfEmpty((string) ($payload['email'] ?? '')),
+            'phone' => $this->nullIfEmpty((string) ($payload['phone'] ?? '')),
+            'role_title' => trim((string) ($payload['role_title'] ?? 'Basic')),
+            'status' => trim((string) ($payload['status'] ?? 'Aktif')) ?: 'Aktif',
+            'commission_type' => trim((string) ($payload['commission_type'] ?? 'Persentase')) ?: 'Persentase',
+            'commission_value' => (float) ($payload['commission_value'] ?? 0),
+            'rating' => (float) ($payload['rating'] ?? 0),
+            'gender' => $this->nullIfEmpty((string) ($payload['gender'] ?? '')),
+            'booking_enabled' => !empty($payload['booking_enabled']) ? 1 : 0,
+            'agenda_color' => trim((string) ($payload['agenda_color'] ?? '#8cc9ff')) ?: '#8cc9ff',
+            'started_working_on' => $this->nullIfEmpty((string) ($payload['started_working_on'] ?? '')),
+            'ended_working_on' => $this->nullIfEmpty((string) ($payload['ended_working_on'] ?? '')),
+            'public_title' => $this->nullIfEmpty((string) ($payload['public_title'] ?? '')),
+            'notes' => $this->nullIfEmpty((string) ($payload['notes'] ?? '')),
+            'instagram_handle' => $this->nullIfEmpty((string) ($payload['instagram_handle'] ?? '')),
+            'photo_data_url' => $this->nullIfEmpty((string) ($payload['photo_data_url'] ?? '')),
+            'commission_rules' => json_encode($commissionRules, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'attendance_pose' => trim((string) ($payload['attendance_pose'] ?? 'Right Tilt')) ?: 'Right Tilt',
+            'attendance_uploaded_pose' => $this->nullIfEmpty((string) ($payload['attendance_uploaded_pose'] ?? '')),
+            'service_ids_raw' => array_values(array_filter($serviceIds, static fn (int $serviceId): bool => $serviceId > 0)),
+        ];
+    }
+
+    private function staffRoleId(): int
+    {
+        $row = $this->dbOne("SELECT id FROM roles WHERE name = 'staff' LIMIT 1");
+
+        return $row !== null ? (int) $row['id'] : 2;
+    }
+
+    private function generateFallbackStaffEmail(string $name): string
+    {
+        $slug = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '.', $name), '.'));
+        if ($slug === '') {
+            $slug = 'staff';
+        }
+
+        return $slug . '.' . time() . '@starstyle.test';
+    }
+
+    private function staffPermissionDefaultsByRoleTitle(string $roleTitle, bool $bookingEnabled): array
+    {
+        $permissions = $this->permissions['defaults']['staff'] ?? [];
+        if (!$bookingEnabled) {
+            $permissions = array_values(array_filter($permissions, static fn (string $permission): bool => $permission !== 'calendar.view' && $permission !== 'calendar.create'));
+        }
+
+        return array_values(array_unique($permissions));
+    }
+
+    private function staffPermissionsForList(int $staffId, string $roleTitle): array
+    {
+        if (!$this->usingDb() || !$this->tableExists('staff_permissions')) {
+            return $this->staffPermissionDefaultsByRoleTitle($roleTitle, true);
+        }
+
+        $rows = $this->dbAll(
+            "SELECT permission_key
+             FROM staff_permissions
+             WHERE staff_id = :staff_id AND granted = 1
+             ORDER BY permission_key",
+            ['staff_id' => $staffId]
+        );
+        if ($rows === []) {
+            return $this->staffPermissionDefaultsByRoleTitle($roleTitle, true);
+        }
+
+        return array_map(static fn (array $row): string => (string) $row['permission_key'], $rows);
+    }
+
+    private function expandShiftDates(string $startDate, string $repeatMode, string $repeatEnd, ?string $repeatEndDate): array
+    {
+        $startDate = trim($startDate);
+        if ($startDate === '') {
+            return [];
+        }
+
+        if ($repeatMode !== 'weekly') {
+            return [$startDate];
+        }
+
+        $dates = [];
+        $cursor = new \DateTimeImmutable($startDate);
+        $limit = $repeatEnd === 'specific' && $repeatEndDate !== null && $repeatEndDate !== ''
+            ? new \DateTimeImmutable($repeatEndDate)
+            : $cursor->modify('+90 days');
+
+        while ($cursor <= $limit) {
+            $dates[] = $cursor->format('Y-m-d');
+            $cursor = $cursor->modify('+7 days');
+        }
+
+        return $dates;
+    }
+
+    private function normalizeCustomerPayload(array $payload): array
+    {
+        $lastVisit = trim((string) ($payload['last_visit_at'] ?? $payload['lastVisit'] ?? ''));
+        if ($lastVisit === '') {
+            $lastVisit = trim((string) ($payload['last_visit'] ?? ''));
+        }
+
+        $birthdate = trim((string) ($payload['birthdate'] ?? ''));
+        $birthdate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $birthdate) === 1 ? $birthdate : null;
+
+        $status = trim((string) ($payload['status'] ?? 'Aktif'));
+        if ($status === '') {
+            $status = 'Aktif';
+        }
+
+        $notifyVia = strtolower(trim((string) ($payload['notify_via'] ?? $payload['notifyVia'] ?? 'off')));
+        if (!in_array($notifyVia, ['off', 'email', 'sms', 'whatsapp'], true)) {
+            $notifyVia = 'off';
+        }
+
+        return [
+            'member_id' => trim((string) ($payload['member_id'] ?? $payload['memberId'] ?? '')),
+            'name' => trim((string) ($payload['name'] ?? '')),
+            'gender' => trim((string) ($payload['gender'] ?? '')),
+            'phone' => $this->nullIfEmpty((string) ($payload['phone'] ?? '')),
+            'email' => $this->nullIfEmpty((string) ($payload['email'] ?? '')),
+            'loyalty_points' => max(0, (int) ($payload['loyalty_points'] ?? $payload['loyalty'] ?? 0)),
+            'last_visit_at' => $this->normalizeDateTime($lastVisit),
+            'tags' => json_encode($this->normalizeCustomerTags($payload['tags'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'notes' => $this->nullIfEmpty((string) ($payload['notes'] ?? '')),
+            'address' => $this->nullIfEmpty((string) ($payload['address'] ?? '')),
+            'status' => $status,
+            'birthdate' => $birthdate,
+            'family_card_number' => $this->nullIfEmpty((string) ($payload['family_card_number'] ?? $payload['familyCardNumber'] ?? $payload['family_card'] ?? '')),
+            'passport_number' => $this->nullIfEmpty((string) ($payload['passport_number'] ?? $payload['passportNumber'] ?? '')),
+            'notify_via' => $notifyVia,
+            'marketing_opt_in' => !empty($payload['marketing_opt_in']) || !empty($payload['marketingOptIn']) ? 1 : 0,
+        ];
+    }
+
+    private function normalizeCustomerTags(mixed $tags): array
+    {
+        if (is_string($tags)) {
+            $tags = preg_split('/[|,]/', $tags) ?: [];
+        }
+
+        if (!is_array($tags)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($tags as $tag) {
+            $value = trim((string) $tag);
+            if ($value === '') {
+                continue;
+            }
+            $normalized[$value] = true;
+        }
+
+        return array_keys($normalized);
+    }
+
+    private function normalizeDateTime(string $value): ?string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+
+        try {
+            return (new \DateTimeImmutable($value))->format('Y-m-d H:i:s');
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function nullIfEmpty(string $value): ?string
+    {
+        $trimmed = trim($value);
+
+        return $trimmed === '' ? null : $trimmed;
+    }
+
+    private function generateCustomerMemberId(): string
+    {
+        do {
+            $memberId = 'MEM-' . str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT);
+            $exists = $this->dbOne(
+                "SELECT id
+                 FROM customers
+                 WHERE member_id = :member_id
+                 LIMIT 1",
+                ['member_id' => $memberId]
+            );
+        } while ($exists !== null);
+
+        return $memberId;
+    }
+
+    private function buildCustomerDetailPayload(array $customer, array $bookings, array $transactions, array $meta): array
+    {
+        $now = new \DateTimeImmutable();
+        $upcoming = [];
+        $past = [];
+        $bookingCount = count($bookings);
+        $completedCount = 0;
+        $cancelCount = 0;
+        $noShowCount = 0;
+
+        foreach ($bookings as $booking) {
+            $status = (string) ($booking['status'] ?? '');
+            $statusKey = $this->customerStatusKey($status);
+            if ($statusKey === 'completed') {
+                $completedCount++;
+            }
+            if ($statusKey === 'cancelled') {
+                $cancelCount++;
+            }
+            if ($statusKey === 'noshow') {
+                $noShowCount++;
+            }
+
+            $item = [
+                'date' => $this->formatCustomerDate((string) ($booking['start_at'] ?? '')),
+                'type' => 'Agenda',
+                'name' => (string) ($booking['service_names'] ?: 'Booking'),
+                'staff' => (string) ($booking['staff_name'] ?? 'Staff'),
+                'location' => (string) ($booking['location_name'] ?? 'Star Salon'),
+                'total' => $this->formatCustomerAmount((float) ($booking['total_amount'] ?? 0)),
+                'note' => (string) ($booking['notes'] ?? '-'),
+                'status' => strtoupper($status !== '' ? $status : 'NEW'),
+                'statusKey' => $statusKey,
+            ];
+
+            $bookingDate = isset($booking['start_at']) ? new \DateTimeImmutable((string) $booking['start_at']) : null;
+            if ($bookingDate !== null && $bookingDate >= $now) {
+                $upcoming[] = $item;
+            } else {
+                $past[] = $item;
+            }
+        }
+
+        $serviceRows = [];
+        $productRows = [];
+        $invoiceRows = [];
+        $totalSales = 0.0;
+
+        foreach ($transactions as $transaction) {
+            $grossTotal = (float) ($transaction['gross_total'] ?? 0);
+            $totalSales += max(0, $grossTotal - (float) ($transaction['discount_amount'] ?? 0) + (float) ($transaction['rounding_amount'] ?? 0));
+            $paidAt = (string) ($transaction['paid_at'] ?? '');
+            $locationName = (string) ($transaction['location_name'] ?? 'Star Salon');
+
+            if ((float) ($transaction['service_total'] ?? 0) > 0) {
+                $serviceRows[] = [
+                    'name' => (string) ($transaction['service_names'] ?: 'Layanan'),
+                    'paymentDate' => $this->formatCustomerDateTime($paidAt),
+                    'location' => $locationName,
+                    'quantity' => (string) (int) ($transaction['service_qty'] ?? 0),
+                    'total' => $this->formatCustomerAmount((float) ($transaction['service_total'] ?? 0)),
+                ];
+            }
+
+            if ((float) ($transaction['product_total'] ?? 0) > 0) {
+                $productRows[] = [
+                    'product' => (string) ($transaction['product_names'] ?: 'Produk'),
+                    'amount' => (string) (int) ($transaction['product_qty'] ?? 0),
+                    'paymentDate' => $this->formatCustomerDateTime($paidAt),
+                    'location' => $locationName,
+                    'total' => $this->formatCustomerAmount((float) ($transaction['product_total'] ?? 0)),
+                ];
+            }
+
+            $invoiceStatus = (string) ($transaction['status'] ?? 'paid');
+            $invoiceRows[] = [
+                'invoiceDate' => $this->formatCustomerDateTime($paidAt),
+                'invoice' => (string) ($transaction['invoice_number'] ?? $transaction['reference'] ?? '-'),
+                'status' => strtoupper($invoiceStatus),
+                'statusKey' => $this->customerStatusKey($invoiceStatus),
+                'location' => $locationName,
+                'total' => $this->formatCustomerAmount($grossTotal),
+            ];
+        }
+
+        return [
+            'stats' => [
+                'totalSales' => $this->formatCustomerAmount($totalSales),
+                'voucherUse' => (string) (int) ($meta['voucher_usage'] ?? 0),
+                'due' => $this->formatCustomerAmount(0),
+                'totalBooking' => (string) $bookingCount,
+                'completed' => (string) $completedCount,
+                'cancel' => (string) $cancelCount,
+                'noShow' => (string) $noShowCount,
+            ],
+            'sections' => [
+                'agenda' => [
+                    'upcoming' => $upcoming,
+                    'past' => $past,
+                ],
+                'layanan' => [
+                    'upcoming' => [],
+                    'past' => $serviceRows,
+                ],
+                'produk' => [
+                    'upcoming' => [],
+                    'past' => $productRows,
+                ],
+                'faktur' => [
+                    'upcoming' => [],
+                    'past' => $invoiceRows,
+                ],
+            ],
+        ];
+    }
+
+    private function formatCustomerAmount(float $value): string
+    {
+        return number_format($value, 2, ',', '.');
+    }
+
+    private function formatCustomerDate(string $value): string
+    {
+        if ($value === '') {
+            return '-';
+        }
+
+        try {
+            return (new \DateTimeImmutable($value))->format('d M Y');
+        } catch (\Throwable) {
+            return $value;
+        }
+    }
+
+    private function formatCustomerDateTime(string $value): string
+    {
+        if ($value === '') {
+            return '-';
+        }
+
+        try {
+            return (new \DateTimeImmutable($value))->format('d M Y H:i');
+        } catch (\Throwable) {
+            return $value;
+        }
+    }
+
+    private function customerStatusKey(string $status): string
+    {
+        $normalized = strtolower(trim($status));
+
+        return match ($normalized) {
+            'cancelled', 'canceled', 'batal' => 'cancelled',
+            'completed', 'done', 'selesai', 'paid' => 'completed',
+            'no-show', 'noshow', 'tidak hadir' => 'noshow',
+            default => 'new',
+        };
+    }
+
+    private function ensureVoucherCatalogSchema(): void
+    {
+        if (!$this->usingDb() || $this->voucherCatalogSchemaEnsured) {
+            return;
+        }
+
+        if (!$this->tableExists('vouchers')) {
+            $this->dbExecute(
+                "CREATE TABLE vouchers (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    voucher_type ENUM('service', 'class', 'gift') NOT NULL,
+                    name VARCHAR(120) NOT NULL,
+                    code VARCHAR(80) NOT NULL UNIQUE,
+                    value DECIMAL(12,2) NOT NULL DEFAULT 0,
+                    price_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+                    usage_limit INT NOT NULL DEFAULT 1,
+                    used_count INT NOT NULL DEFAULT 0,
+                    expired_at DATE NOT NULL,
+                    status VARCHAR(30) NOT NULL DEFAULT 'Aktif',
+                    location_name VARCHAR(150) NOT NULL DEFAULT 'Semua Lokasi',
+                    message_text TEXT NULL,
+                    service_items_json LONGTEXT NULL,
+                    combine_quantity TINYINT(1) NOT NULL DEFAULT 0,
+                    max_quantity INT NOT NULL DEFAULT 1,
+                    expiry_mode VARCHAR(20) NOT NULL DEFAULT 'relative',
+                    expiry_value VARCHAR(60) NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at DATETIME NULL DEFAULT NULL
+                )"
+            );
+        }
+
+        $voucherColumns = [
+            'price_value' => 'ADD COLUMN price_value DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER value',
+            'location_name' => "ADD COLUMN location_name VARCHAR(150) NOT NULL DEFAULT 'Semua Lokasi' AFTER status",
+            'message_text' => 'ADD COLUMN message_text TEXT NULL AFTER location_name',
+            'service_items_json' => 'ADD COLUMN service_items_json LONGTEXT NULL AFTER message_text',
+            'combine_quantity' => 'ADD COLUMN combine_quantity TINYINT(1) NOT NULL DEFAULT 0 AFTER service_items_json',
+            'max_quantity' => 'ADD COLUMN max_quantity INT NOT NULL DEFAULT 1 AFTER combine_quantity',
+            'expiry_mode' => "ADD COLUMN expiry_mode VARCHAR(20) NOT NULL DEFAULT 'relative' AFTER max_quantity",
+            'expiry_value' => 'ADD COLUMN expiry_value VARCHAR(60) NULL AFTER expiry_mode',
+            'created_at' => 'ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER expiry_value',
+            'updated_at' => 'ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER created_at',
+            'deleted_at' => 'ADD COLUMN deleted_at DATETIME NULL DEFAULT NULL AFTER updated_at',
+        ];
+        foreach ($voucherColumns as $column => $ddl) {
+            if (!$this->columnExists('vouchers', $column)) {
+                $this->dbExecute("ALTER TABLE vouchers {$ddl}");
+            }
+        }
+
+        if (!$this->tableExists('voucher_discounts')) {
+            $this->dbExecute(
+                "CREATE TABLE voucher_discounts (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(150) NOT NULL,
+                    mode VARCHAR(20) NOT NULL DEFAULT 'amount',
+                    amount_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+                    max_discount_value DECIMAL(12,2) NULL DEFAULT NULL,
+                    scopes_json LONGTEXT NULL,
+                    status VARCHAR(30) NOT NULL DEFAULT 'Aktif',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at DATETIME NULL DEFAULT NULL
+                )"
+            );
+        }
+
+        $this->voucherCatalogSchemaEnsured = true;
+    }
+
+    private function mapVoucherRecord(array $voucher): array
+    {
+        $type = (string) ($voucher['voucher_type'] ?? 'gift');
+        $serviceItems = json_decode((string) ($voucher['service_items_json'] ?? '[]'), true);
+        $serviceItems = is_array($serviceItems) ? $serviceItems : [];
+        $isGift = $type === 'gift';
+        $combineQuantity = (bool) ($voucher['combine_quantity'] ?? false);
+        $maxQuantity = max(1, (int) ($voucher['max_quantity'] ?? 1));
+        $status = (string) ($voucher['status'] ?? 'Aktif');
+        $expiryValue = (string) (($voucher['expiry_value'] ?? '') ?: ($voucher['expired_at'] ?? ''));
+        $duration = $this->formatVoucherDurationLabel($expiryValue);
+        $value = $isGift
+            ? $this->formatCurrencyAmount((float) ($voucher['value'] ?? 0))
+            : $this->buildVoucherServiceDisplay($serviceItems, $combineQuantity, $maxQuantity);
+
+        return [
+            'id' => (int) ($voucher['id'] ?? 0),
+            'code' => (string) ($voucher['code'] ?? ''),
+            'type' => $type,
+            'type_key' => $type,
+            'type_code' => $isGift ? 'G' : 'S',
+            'type_label' => $isGift ? 'Gift Type' : 'Service Type',
+            'name' => (string) ($voucher['name'] ?? ''),
+            'value' => $value,
+            'editor_value' => (string) ($isGift ? (float) ($voucher['value'] ?? 0) : (float) ($voucher['price_value'] ?? 0)),
+            'price_value' => (string) ((float) ($voucher['price_value'] ?? 0)),
+            'duration' => $duration,
+            'expiry_label' => $expiryValue,
+            'expiry_value' => $expiryValue,
+            'location' => (string) (($voucher['location_name'] ?? '') ?: 'Semua Lokasi'),
+            'status' => $this->formatVoucherStatusLabel($status),
+            'service_name' => $this->buildVoucherServiceDisplay($serviceItems, $combineQuantity, $maxQuantity),
+            'message' => (string) (($voucher['message_text'] ?? '') ?: 'Thank you!'),
+            'active' => in_array(strtolower(trim($status)), ['aktif', 'active'], true),
+            'search' => strtolower(trim(implode(' ', [
+                $isGift ? 'gift type' : 'service type',
+                (string) ($voucher['name'] ?? ''),
+                $value,
+                $duration,
+                (string) (($voucher['location_name'] ?? '') ?: 'Semua Lokasi'),
+                $this->formatVoucherStatusLabel($status),
+            ]))),
+            'usage_limit' => (int) ($voucher['usage_limit'] ?? 1),
+            'used' => (int) ($voucher['used_count'] ?? 0),
+            'expired_at' => (string) ($voucher['expired_at'] ?? ''),
+            'services_json' => json_encode($serviceItems, JSON_UNESCAPED_UNICODE),
+            'combine_quantity' => $combineQuantity,
+            'max_quantity' => $maxQuantity,
+        ];
+    }
+
+    private function mapDemoVoucherRecord(array $voucher): array
+    {
+        return [
+            'id' => (int) ($voucher['id'] ?? 0),
+            'code' => (string) ($voucher['code'] ?? ''),
+            'type' => (string) ($voucher['type'] ?? 'gift'),
+            'type_key' => (string) ($voucher['type'] ?? 'gift'),
+            'type_code' => strtoupper(substr((string) ($voucher['type'] ?? 'g'), 0, 1)),
+            'type_label' => (($voucher['type'] ?? 'gift') === 'gift') ? 'Gift Type' : 'Service Type',
+            'name' => (string) ($voucher['name'] ?? ''),
+            'value' => (($voucher['type'] ?? 'gift') === 'gift')
+                ? $this->formatCurrencyAmount((float) ($voucher['value'] ?? 0))
+                : (string) (($voucher['service_name'] ?? $voucher['name'] ?? 'No item')),
+            'editor_value' => (string) ((float) ($voucher['value'] ?? 0)),
+            'price_value' => (string) ((float) ($voucher['value'] ?? 0)),
+            'duration' => $this->formatVoucherDurationLabel((string) ($voucher['expired_at'] ?? '')),
+            'expiry_label' => (string) ($voucher['expired_at'] ?? ''),
+            'expiry_value' => (string) ($voucher['expired_at'] ?? ''),
+            'location' => 'Semua Lokasi',
+            'status' => $this->formatVoucherStatusLabel((string) ($voucher['status'] ?? 'Aktif')),
+            'service_name' => (string) (($voucher['service_name'] ?? '') ?: ($voucher['name'] ?? '')),
+            'message' => 'Thank you!',
+            'active' => in_array(strtolower(trim((string) ($voucher['status'] ?? 'Aktif'))), ['aktif', 'active'], true),
+            'search' => strtolower((string) (($voucher['name'] ?? '') . ' ' . ($voucher['code'] ?? ''))),
+            'usage_limit' => (int) ($voucher['usage_limit'] ?? 1),
+            'used' => (int) ($voucher['used'] ?? 0),
+            'expired_at' => (string) ($voucher['expired_at'] ?? ''),
+            'services_json' => '[]',
+            'combine_quantity' => false,
+            'max_quantity' => 1,
+        ];
+    }
+
+    private function mapVoucherDiscountRecord(array $discount): array
+    {
+        $mode = (string) ($discount['mode'] ?? 'amount');
+        $amount = (float) ($discount['amount_value'] ?? 0);
+        $max = (float) ($discount['max_discount_value'] ?? 0);
+        $scopes = json_decode((string) ($discount['scopes_json'] ?? '[]'), true);
+        $scopes = is_array($scopes) ? array_values(array_filter(array_map('strval', $scopes))) : [];
+
+        return [
+            'id' => (int) ($discount['id'] ?? 0),
+            'name' => (string) ($discount['name'] ?? ''),
+            'mode' => $mode === 'percent' ? 'percent' : 'amount',
+            'amount_label' => $mode === 'percent' ? number_format($amount, 2, '.', '') . ' %' : $this->formatCurrencyAmount($amount),
+            'amount_value' => $this->trimDecimalString($amount),
+            'max_discount' => $this->formatCurrencyAmount($max),
+            'max_discount_value' => $this->trimDecimalString($max),
+            'applies_to' => $scopes,
+            'search' => strtolower((string) (($discount['name'] ?? '') . ' ' . $amount . ' ' . implode(' ', $scopes))),
+        ];
+    }
+
+    private function normalizeVoucherPayload(array $payload): array
+    {
+        $type = strtolower(trim((string) ($payload['type'] ?? $payload['voucher_type'] ?? 'gift')));
+        if (!in_array($type, ['gift', 'service'], true)) {
+            $type = 'gift';
+        }
+
+        $serviceItems = $payload['service_items'] ?? $payload['services'] ?? [];
+        if (is_string($serviceItems)) {
+            $serviceItems = json_decode($serviceItems, true);
+        }
+        $serviceItems = is_array($serviceItems) ? array_values(array_filter(array_map(static function (mixed $item): ?array {
+            if (!is_array($item)) {
+                return null;
+            }
+
+            $name = trim((string) ($item['name'] ?? ''));
+            if ($name === '') {
+                return null;
+            }
+
+            return [
+                'id' => isset($item['id']) && $item['id'] !== '' ? (int) $item['id'] : null,
+                'name' => $name,
+                'price' => (string) ($item['price'] ?? 'Rp 0,00'),
+                'duration' => (string) ($item['duration'] ?? ''),
+                'quantity' => max(1, (int) ($item['quantity'] ?? 1)),
+            ];
+        }, $serviceItems))) : [];
+
+        $value = (float) ($payload['value'] ?? $payload['amount_value'] ?? 0);
+        $priceValue = (float) ($payload['price_value'] ?? $payload['price'] ?? $value);
+        $expiryValue = trim((string) ($payload['expiry_value'] ?? $payload['expiry_label'] ?? 'After 1 Month'));
+        $status = (int) ($payload['active'] ?? 1) === 1 ? 'Aktif' : 'Nonaktif';
+
+        return [
+            'voucher_type' => $type,
+            'name' => trim((string) ($payload['name'] ?? '')),
+            'code' => trim((string) ($payload['code'] ?? '')),
+            'value' => $type === 'gift' ? max(0, $value) : 0,
+            'price_value' => max(0, $priceValue),
+            'usage_limit' => max(1, (int) ($payload['usage_limit'] ?? 1)),
+            'expired_at' => $this->resolveVoucherExpiredAt($expiryValue),
+            'status' => $status,
+            'location_name' => trim((string) ($payload['location_name'] ?? $payload['location'] ?? '')) ?: 'Semua Lokasi',
+            'message_text' => trim((string) ($payload['message_text'] ?? $payload['message'] ?? '')) ?: 'Thank you!',
+            'service_items_json' => json_encode($serviceItems, JSON_UNESCAPED_UNICODE),
+            'combine_quantity' => !empty($payload['combine_quantity']) ? 1 : 0,
+            'max_quantity' => max(1, (int) ($payload['max_quantity'] ?? 1)),
+            'expiry_mode' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $expiryValue) ? 'specific' : 'relative',
+            'expiry_value' => $expiryValue,
+        ];
+    }
+
+    private function normalizeVoucherDiscountPayload(array $payload): array
+    {
+        $mode = strtolower(trim((string) ($payload['mode'] ?? 'amount')));
+        if (!in_array($mode, ['amount', 'percent'], true)) {
+            $mode = 'amount';
+        }
+
+        $scopes = $payload['scopes'] ?? [];
+        if (is_string($scopes)) {
+            $decodedScopes = json_decode($scopes, true);
+            $scopes = is_array($decodedScopes) ? $decodedScopes : preg_split('/[|,]/', $scopes);
+        }
+        $scopes = is_array($scopes) ? array_values(array_filter(array_map(static fn (mixed $scope): string => trim((string) $scope), $scopes))) : [];
+
+        return [
+            'name' => trim((string) ($payload['name'] ?? '')),
+            'mode' => $mode,
+            'amount_value' => max(0, (float) ($payload['amount_value'] ?? $payload['amount'] ?? 0)),
+            'max_discount_value' => $mode === 'percent' ? max(0, (float) ($payload['max_discount_value'] ?? $payload['max_discount'] ?? 0)) : 0,
+            'scopes_json' => json_encode($scopes, JSON_UNESCAPED_UNICODE),
+            'status' => 'Aktif',
+        ];
+    }
+
+    private function generateVoucherCode(string $type): string
+    {
+        $prefix = $type === 'gift' ? 'GIF' : 'SRV';
+
+        do {
+            $code = $prefix . '-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+            $exists = $this->dbOne("SELECT id FROM vouchers WHERE code = :code LIMIT 1", ['code' => $code]);
+        } while ($exists !== null);
+
+        return $code;
+    }
+
+    private function resolveVoucherExpiredAt(string $expiryValue): string
+    {
+        $value = trim($expiryValue);
+        if ($value === '') {
+            return date('Y-m-d', strtotime('+1 month'));
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            return $value;
+        }
+
+        $normalized = strtolower($value);
+        return match (true) {
+            str_contains($normalized, 'no expiry') => '2099-12-31',
+            str_contains($normalized, '2 week') => date('Y-m-d', strtotime('+2 weeks')),
+            str_contains($normalized, '1 week') => date('Y-m-d', strtotime('+1 week')),
+            str_contains($normalized, '2 month') => date('Y-m-d', strtotime('+2 months')),
+            str_contains($normalized, '3 month') => date('Y-m-d', strtotime('+3 months')),
+            str_contains($normalized, '6 month') => date('Y-m-d', strtotime('+6 months')),
+            str_contains($normalized, '1 year') => date('Y-m-d', strtotime('+1 year')),
+            default => date('Y-m-d', strtotime('+1 month')),
+        };
+    }
+
+    private function formatVoucherStatusLabel(string $status): string
+    {
+        return in_array(strtolower(trim($status)), ['aktif', 'active'], true) ? 'Active' : 'Disable';
+    }
+
+    private function formatVoucherDurationLabel(string $value): string
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return '1 Bulan';
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $trimmed)) {
+            try {
+                return (new \DateTimeImmutable($trimmed))->format('d M Y');
+            } catch (\Throwable) {
+                return $trimmed;
+            }
+        }
+
+        $normalized = strtolower($trimmed);
+        return match (true) {
+            str_contains($normalized, 'no expiry') => 'Tanpa Kadaluarsa',
+            str_contains($normalized, '2 week') => '2 Minggu',
+            str_contains($normalized, '1 week') => '1 Minggu',
+            str_contains($normalized, '3 month') => '3 Bulan',
+            str_contains($normalized, '2 month') => '2 Bulan',
+            str_contains($normalized, '6 month') => '6 Bulan',
+            str_contains($normalized, '1 year') => '1 Tahun',
+            default => '1 Bulan',
+        };
+    }
+
+    private function buildVoucherServiceDisplay(array $serviceItems, bool $combineQuantity, int $maxQuantity): string
+    {
+        if ($serviceItems === []) {
+            return 'No item';
+        }
+
+        $names = array_map(static function (array $item) use ($combineQuantity): string {
+            $name = trim((string) ($item['name'] ?? ''));
+            $quantity = max(1, (int) ($item['quantity'] ?? 1));
+
+            if ($combineQuantity || $name === '') {
+                return $name;
+            }
+
+            return $quantity > 1 ? $quantity . 'x ' . $name : $name;
+        }, $serviceItems);
+        $names = array_values(array_filter($names));
+
+        if ($names === []) {
+            return 'No item';
+        }
+
+        return $combineQuantity ? ($maxQuantity . 'x ' . implode(', ', $names)) : implode(', ', $names);
+    }
+
+    private function formatCurrencyAmount(float $value): string
+    {
+        return 'Rp ' . number_format($value, 2, ',', '.');
+    }
+
+    private function trimDecimalString(float $value): string
+    {
+        $formatted = number_format($value, 2, '.', '');
+        return rtrim(rtrim($formatted, '0'), '.');
+    }
+
+    private function findVoucherRow(int $voucherId): ?array
+    {
+        foreach ($this->getVouchers() as $voucher) {
+            if ((int) ($voucher['id'] ?? 0) === $voucherId) {
+                return $voucher;
+            }
+        }
+
+        return null;
+    }
+
+    private function findVoucherDiscountRow(int $discountId): ?array
+    {
+        foreach ($this->getVoucherDiscounts() as $discount) {
+            if ((int) ($discount['id'] ?? 0) === $discountId) {
+                return $discount;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeBusinessHoursSchedule(mixed $schedule): array
+    {
+        $defaults = [
+            ['key' => 'minggu', 'label' => 'Minggu', 'enabled' => true, 'open' => '03:00', 'close' => '23:00'],
+            ['key' => 'senin', 'label' => 'Senin', 'enabled' => true, 'open' => '00:00', 'close' => '23:00'],
+            ['key' => 'selasa', 'label' => 'Selasa', 'enabled' => false, 'open' => '08:00', 'close' => '22:00'],
+            ['key' => 'rabu', 'label' => 'Rabu', 'enabled' => false, 'open' => '08:00', 'close' => '22:00'],
+            ['key' => 'kamis', 'label' => 'Kamis', 'enabled' => false, 'open' => '08:00', 'close' => '22:00'],
+            ['key' => 'jumat', 'label' => 'Jumat', 'enabled' => false, 'open' => '08:00', 'close' => '22:00'],
+            ['key' => 'sabtu', 'label' => 'Sabtu', 'enabled' => true, 'open' => '08:00', 'close' => '22:00'],
+        ];
+
+        $indexed = [];
+        if (is_array($schedule)) {
+            foreach ($schedule as $day) {
+                if (!is_array($day)) {
+                    continue;
+                }
+
+                $key = trim((string) ($day['key'] ?? ''));
+                if ($key === '') {
+                    continue;
+                }
+
+                $indexed[$key] = [
+                    'key' => $key,
+                    'label' => (string) ($day['label'] ?? ucfirst($key)),
+                    'enabled' => !empty($day['enabled']),
+                    'open' => preg_match('/^\d{2}:\d{2}$/', (string) ($day['open'] ?? '')) === 1 ? (string) $day['open'] : '08:00',
+                    'close' => preg_match('/^\d{2}:\d{2}$/', (string) ($day['close'] ?? '')) === 1 ? (string) $day['close'] : '22:00',
+                ];
+            }
+        }
+
+        $normalized = [];
+        foreach ($defaults as $default) {
+            $key = $default['key'];
+            $normalized[] = $indexed[$key] ?? $default;
+        }
+
+        return $normalized;
+    }
+
+    private function summarizeBusinessHoursSchedule(array $schedule): string
+    {
+        $activeDays = array_values(array_filter($schedule, static fn (array $day): bool => !empty($day['enabled'])));
+        if ($activeDays === []) {
+            return 'Tutup';
+        }
+
+        $first = $activeDays[0];
+        $sameHours = array_reduce(
+            $activeDays,
+            static fn (bool $carry, array $day): bool => $carry && $day['open'] === $first['open'] && $day['close'] === $first['close'],
+            true
+        );
+
+        if ($sameHours) {
+            return $first['open'] . ' - ' . $first['close'];
+        }
+
+        $opens = array_map(static fn (array $day): string => (string) $day['open'], $activeDays);
+        $closes = array_map(static fn (array $day): string => (string) $day['close'], $activeDays);
+
+        return min($opens) . ' - ' . max($closes);
     }
 }

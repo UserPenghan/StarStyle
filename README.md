@@ -32,6 +32,16 @@ php -S localhost:8000 -t public
 
 3. Buka [http://localhost:8000](http://localhost:8000).
 
+## Setup Hosting
+
+1. Salin `.env.example` menjadi `.env`.
+2. Sesuaikan `APP_DATA_SOURCE`, `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, dan `DB_PASSWORD`.
+3. Pastikan document root hosting mengarah ke folder `public/`.
+4. Jika memakai Apache, pastikan `mod_rewrite` aktif dan file `public/.htaccess` ikut terdeploy.
+5. Pastikan folder `storage/cache/` dan `storage/cache/payment-proofs/` writable.
+6. Import `database/schema.sql` ke database tujuan.
+7. Jangan ikut upload file lokal seperti patch, snapshot, `.env`, session, log, dan bukti transfer lama.
+
 ## Demo Account
 
 - Admin: `admin@starstyle.test` / `password123`
@@ -50,8 +60,9 @@ php -S localhost:8000 -t public
 
 ## Database
 
-- Skema utama: [database/schema.sql](/C:/Users/hi/Documents/New%20project/database/schema.sql)
-- Seed demo: [database/seeders/demo_seed.sql](/C:/Users/hi/Documents/New%20project/database/seeders/demo_seed.sql)
+- Skema utama: `database/schema.sql`
+- Seed demo: `database/seeders/demo_seed.sql`
+- Arsip dump lokal: `database/exports/starstyle.sql`
 
 Versi aplikasi saat ini memakai repository data demo berbasis PHP agar UI dan flow bisa langsung dicoba tanpa setup database lebih dulu. Saat akan dipindah ke MySQL/MariaDB penuh, struktur tabel dan seed awal sudah disiapkan.
 

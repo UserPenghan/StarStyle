@@ -22,6 +22,22 @@ $attendanceByStaff = [];
 foreach ($attendance as $entry) {
     $attendanceByStaff[$entry['staff_id']] = $entry;
 }
+$shiftMap = [];
+foreach ($shifts as $shift) {
+    $shiftDate = (string) ($shift['date'] ?? $shift['shift_date'] ?? '');
+    $shiftStart = (string) ($shift['start'] ?? $shift['start_time'] ?? '');
+    $shiftEnd = (string) ($shift['end'] ?? $shift['end_time'] ?? '');
+
+    if ($shiftDate === '' || $shiftStart === '' || $shiftEnd === '') {
+        continue;
+    }
+
+    $shiftMap[(int) ($shift['staff_id'] ?? 0)][$shiftDate][] = [
+        'start' => substr($shiftStart, 0, 5),
+        'end' => substr($shiftEnd, 0, 5),
+        'repeat_mode' => (string) ($shift['repeat_mode'] ?? 'none'),
+    ];
+}
 
 $staffById = [];
 foreach ($staff as $member) {
@@ -158,7 +174,7 @@ $commissionStaffChoices = array_values(array_unique($commissionStaffChoices));
 sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
 ?>
 
-<section class="staff-shell js-staff-shell">
+<section class="staff-shell js-staff-shell" data-staff-shifts="<?= e(json_encode($shiftMap, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>">
     <div class="staff-tabs">
         <button class="staff-tab is-active" type="button" data-staff-tab="work">Jam Kerja</button>
         <button class="staff-tab" type="button" data-staff-tab="members">Anggota Staf</button>
@@ -425,13 +441,27 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                     <div class="staff-member-row"
                          data-staff-member-row
                          data-staff-id="<?= e((string) $member['id']) ?>"
+                         data-staff-user-id="<?= e((string) ($member['user_id'] ?? 0)) ?>"
                          data-name="<?= e($member['name']) ?>"
                          data-email="<?= e($member['email']) ?>"
                          data-phone="<?= e($member['phone']) ?>"
-                         data-location="Star Salon"
+                         data-location="<?= e((string) ($member['location_name'] ?? 'Star Salon')) ?>"
+                         data-location-id="<?= e((string) ($member['location_id'] ?? 1)) ?>"
                          data-role="<?= e($member['role']) ?>"
                          data-status="<?= e($member['status']) ?>"
+                         data-gender="<?= e((string) ($member['gender'] ?? '')) ?>"
                          data-booking-enabled="<?= in_array('calendar.view', $member['permissions'] ?? ['calendar.view'], true) ? '1' : '0' ?>"
+                         data-agenda-color="<?= e((string) ($member['agenda_color'] ?? '#8cc9ff')) ?>"
+                         data-started-working-on="<?= e((string) ($member['started_working_on'] ?? '')) ?>"
+                         data-ended-working-on="<?= e((string) ($member['ended_working_on'] ?? '')) ?>"
+                         data-public-title="<?= e((string) ($member['public_title'] ?? '')) ?>"
+                         data-notes="<?= e((string) ($member['notes'] ?? '')) ?>"
+                         data-instagram-handle="<?= e((string) ($member['instagram_handle'] ?? '')) ?>"
+                         data-photo-data-url="<?= e((string) ($member['photo_data_url'] ?? '')) ?>"
+                         data-service-ids="<?= e(implode(',', $member['service_ids'] ?? [])) ?>"
+                         data-commission-type="<?= e((string) ($member['commission_type'] ?? 'Persentase')) ?>"
+                         data-commission-value="<?= e((string) ($member['commission_value'] ?? 0)) ?>"
+                         data-commission-rules="<?= e(json_encode($member['commission_rules'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>"
                          tabindex="0"
                          role="button">
                         <div class="staff-member-cell staff-member-cell--person">
@@ -444,6 +474,19 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                         <div class="staff-member-cell"><?= in_array('calendar.view', $member['permissions'] ?? ['calendar.view'], true) ? 'Kalender Pemesanan diaktifkan' : 'Kalender belum diaktifkan' ?></div>
                     </div>
                 <?php endforeach; ?>
+            </div>
+            <div class="sales-pagination sales-pagination--services" data-staff-pagination="members">
+                <div class="sales-pagination__meta">Total <span class="js-staff-members-total"><?= e((string) count($staff)) ?></span></div>
+                <div class="sales-pagination__page-size">
+                    <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                    <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                </div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                <div class="sales-pagination__pages" data-pagination-page-list></div>
+                <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                <div class="sales-pagination__goto">Go to</div>
+                <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
             </div>
         </section>
 
@@ -504,7 +547,7 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                             $attendanceStatusLabel = (($member['status'] ?? '') === 'Aktif') ? 'Active' : 'Deactive';
                             $attendanceStatusClass = (($member['status'] ?? '') === 'Aktif') ? '' : ' is-inactive';
                             ?>
-                            <tr data-staff-attendance-row data-name="<?= e($member['name']) ?>" data-status="<?= e($member['status']) ?>">
+                            <tr data-staff-attendance-row data-staff-id="<?= e((string) $member['id']) ?>" data-name="<?= e($member['name']) ?>" data-status="<?= e($member['status']) ?>" data-attendance-pose="<?= e((string) ($member['attendance_pose'] ?? 'Right Tilt')) ?>" data-attendance-uploaded-pose="<?= e((string) ($member['attendance_uploaded_pose'] ?? '')) ?>">
                                 <td>
                                     <div class="customers-person-cell">
                                         <div class="customers-person-cell__avatar"><i class="bi bi-person"></i></div>
@@ -523,15 +566,18 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                         <?php endforeach; ?>
                     </tbody>
                 </table>
-                <div class="customers-table-footer">
-                    <div>Total <?= e((string) count($staff)) ?></div>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><span>50/page</span><i class="bi bi-chevron-down"></i></button>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                    <span class="customers-pagination-current">1</span>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                    <div>Go to</div>
-                    <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services" data-staff-pagination="attendance-staff">
+                    <div class="sales-pagination__meta">Total <span class="js-staff-attendance-staff-total"><?= e((string) count($staff)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                    </div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-pagination-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
 
@@ -563,7 +609,7 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                                 $clockOut = $entry['clock_out'] ?? '17:00';
                                 $duration = $clockOut !== '-' ? '9h' : '-';
                                 ?>
-                                <tr data-staff-attendance-record data-name="<?= e($member['name']) ?>" data-status="<?= e($member['status']) ?>">
+                                <tr data-staff-attendance-record data-staff-id="<?= e((string) $member['id']) ?>" data-name="<?= e($member['name']) ?>" data-status="<?= e($member['status']) ?>">
                                     <td class="staff-attendance-date-col"><?= e($today->format('Y-m-d')) ?></td>
                                     <td><button class="staff-attendance-name" type="button"><?= e($member['name']) ?></button></td>
                                     <td>08:00 - 17:00</td>
@@ -592,15 +638,18 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                         </tbody>
                     </table>
                 </div>
-                <div class="customers-table-footer">
-                    <div>Total <?= e((string) count($staff)) ?></div>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><span>50/page</span><i class="bi bi-chevron-down"></i></button>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                    <span class="customers-pagination-current">1</span>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                    <div>Go to</div>
-                    <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services" data-staff-pagination="attendance-records">
+                    <div class="sales-pagination__meta">Total <span class="js-staff-attendance-records-total"><?= e((string) count($staff)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                    </div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-pagination-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
 
@@ -736,15 +785,18 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                         </tbody>
                     </table>
                 </div>
-                <div class="customers-table-footer staff-commission-table__footer">
-                    <div>Total <?= e((string) count($commissionDummyEntries)) ?></div>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><span>10/page</span><i class="bi bi-chevron-down"></i></button>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-left"></i></button>
-                    <span class="customers-pagination-current">1</span>
-                    <button class="customers-pagination-btn" type="button"><i class="bi bi-chevron-right"></i></button>
-                    <div>Go to</div>
-                    <button class="dashboard-filter customers-mini-input" type="button">1</button>
-                    <button class="dashboard-filter customers-mini-filter" type="button"><i class="bi bi-chevron-up"></i></button>
+                <div class="sales-pagination sales-pagination--services staff-commission-table__footer" data-staff-pagination="commission">
+                    <div class="sales-pagination__meta">Total <span class="js-staff-commission-total"><?= e((string) count($commissionDummyEntries)) ?></span></div>
+                    <div class="sales-pagination__page-size">
+                        <button type="button" class="sales-pagination__select" data-pagination-page-size-toggle aria-expanded="false">20/page <i class="bi bi-chevron-down"></i></button>
+                        <div class="sales-pagination__page-size-menu" data-pagination-page-size-menu hidden></div>
+                    </div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-prev aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                    <div class="sales-pagination__pages" data-pagination-page-list></div>
+                    <button type="button" class="sales-pagination__nav" data-pagination-page-next aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    <div class="sales-pagination__goto">Go to</div>
+                    <input class="sales-pagination__input" data-pagination-page-input type="text" inputmode="numeric" value="1" aria-label="Pergi ke halaman">
+                    <button type="button" class="sales-pagination__top" data-pagination-page-top aria-label="Kembali ke atas"><i class="bi bi-chevron-up"></i></button>
                 </div>
             </div>
         </section>
@@ -844,12 +896,12 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                         <input class="form-control customer-input-flat js-staff-new-title" type="text" placeholder="Terlihat hanya di pemesanan online">
 
                         <label>Catatan</label>
-                        <textarea class="form-control customer-input-flat" rows="4" placeholder="Terlihat hanya di pengaturan staff"></textarea>
+                        <textarea class="form-control customer-input-flat js-staff-new-notes" rows="4" placeholder="Terlihat hanya di pengaturan staff"></textarea>
 
                         <label>Media Sosial</label>
                         <div class="staff-social-row">
                             <span><i class="bi bi-instagram"></i></span>
-                            <input class="form-control customer-input-flat" type="text">
+                            <input class="form-control customer-input-flat js-staff-new-instagram" type="text">
                         </div>
                     </div>
                 </div>
@@ -864,7 +916,7 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                         </label>
                         <label class="staff-location-row" data-location-row>
                             <span>Star Salon</span>
-                            <input class="js-staff-location-check" type="checkbox" checked>
+                            <input class="js-staff-location-check" type="checkbox" value="1" checked>
                             <i></i>
                         </label>
                     </div>
@@ -902,7 +954,7 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                             <div class="staff-commission-setting">
                                 <label><?= e($category['label']) ?></label>
                                 <div>
-                                    <span><?= e($category['value']) ?></span>
+                                    <span data-commission-summary="<?= e($category['id']) ?>"><?= e($category['value']) ?></span>
                                     <button type="button" data-commission-edit="<?= e($category['id']) ?>">Ganti</button>
                                 </div>
                             </div>
@@ -1200,7 +1252,7 @@ sort($commissionStaffChoices, SORT_NATURAL | SORT_FLAG_CASE);
                 <select class="form-select customer-input-flat js-new-attendance-staff">
                     <option value="" selected disabled>Pilih staff</option>
                     <?php foreach ($staff as $member): ?>
-                        <option value="<?= e($member['name']) ?>"><?= e($member['name']) ?></option>
+                        <option value="<?= e((string) $member['id']) ?>" data-staff-name="<?= e($member['name']) ?>"><?= e($member['name']) ?></option>
                     <?php endforeach; ?>
                 </select>
 
